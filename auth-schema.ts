@@ -60,6 +60,11 @@ const signUpWithEmailSchema = insertUserSchema
       username: "jane.doe",
     },
   });
+const signInWithEmailSchema = z.object({
+  email: z.email().openapi({ example: "jane@example.com" }),
+  password: z.string().min(1).openapi({ example: "supersecret" }),
+  rememberMe: z.boolean().openapi({ example: true }).optional(),
+});
 
 export const session = pgTable(
   "session",
@@ -144,4 +149,5 @@ export {
   insertUserSchema,
   updateUserSchema,
   signUpWithEmailSchema,
+  signInWithEmailSchema,
 };
