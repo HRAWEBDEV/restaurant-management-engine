@@ -5,6 +5,7 @@ import { requestId } from "hono/request-id";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { serveStatic } from "@hono/bun";
+import { apiV1Routes } from "./v1/api";
 
 const app = new OpenAPIHono();
 let server: Server<undefined> | null = null;
@@ -27,6 +28,8 @@ app.use(
     crossOriginResourcePolicy: "cross-origin",
   }),
 );
+//
+app.route("/", apiV1Routes);
 // static files
 app.use("static/*", serveStatic({ root: "./" }));
 // docs
