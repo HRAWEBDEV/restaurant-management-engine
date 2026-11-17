@@ -1,0 +1,29 @@
+// src/auth.ts
+import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "@better-auth/drizzle-adapter";
+import { db } from "./db/connect";
+import { username, openAPI } from "better-auth/plugins";
+
+const SESSION_REFRESH_THRESHOLD_S = 60 * 5; // 5 minutes
+const SESSION_EXPIRE_S = 60 * 60 * 24;
+export const auth = betterAuth({
+  database: drizzleAdapter(db, { provider: "pg" }),
+  emailAndPassword: {
+    enabled: true,
+  },
+  plugins: [username(), openAPI()],
+  session: {
+    expiresIn: SESSION_EXPIRE_S,
+    updateAge: SESSION_REFRESH_THRESHOLD_S,
+  },
+  socialProviders: {
+    // google: {
+    //   clientId: process.env.GOOGLE_CLIENT_ID!,
+    //   clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    // },
+    // github: {
+    //   clientId: process.env.GITHUB_CLIENT_ID!,
+    //   clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+    // },
+  },
+});
