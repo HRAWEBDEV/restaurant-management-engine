@@ -1,6 +1,8 @@
 import { swaggerUI } from "@hono/swagger-ui";
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { authMiddleware } from "../../middlewares/authMiddleware";
+import { InternalError } from "../../utils/InternalError";
+import { NotFoundError } from "../../utils/NotFoundError";
 import { authRoutes } from "./routes/auth";
 
 const checkHealth = createRoute({
@@ -41,5 +43,17 @@ apiV1Routes.route("/", authRoutes);
 
 // every route registered after this line requires a signed in user
 apiV1Routes.use(authMiddleware);
+
+// global error handling, keep this after all routes
+apiV1Routes.notFound((c) => new NotFoundError().handle(c));
+
+apiV1Routes.onError((error, c) => {
+  if (error instanceof NotFoundError) {
+    return error.handle(c);
+  }
+
+  console.error("unhandled api error", error);
+  return new InternalError().handle(c);
+});
 
 export { apiV1Routes };
