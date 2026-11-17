@@ -1,11 +1,46 @@
 import { z } from "@hono/zod-openapi";
 import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
+import { nanoid } from "nanoid";
+import slugify from "slugify";
 import type { DBExecutor } from "../db/connect";
 import { organizationMembers } from "../db/schemas/organizationMembers";
 import {
   organizations,
   selectOrganizationSchema,
 } from "../db/schemas/organizations";
+import { InternalError } from "../utils/InternalError";
+
+const ORGANIZATION_SLUG_MAX_LENGTH = 150;
+const ORGANIZATION_SLUG_SUFFIX_LENGTH = 8;
+const ORGANIZATION_SLUG_ATTEMPTS = 5;
+
+/**
+ * Builds the human-readable part of an organization slug. The random suffix
+ * is appended per attempt so a conflict can simply be retried.
+ */
+function toOrganizationSlugBase(name: string) {
+  const base = slugify(name, { lower: true, strict: true, trim: true })
+    .slice(
+      0,
+      ORGANIZATION_SLUG_MAX_LENGTH - ORGANIZATION_SLUG_SUFFIX_LENGTH - 1,
+    )
+    .replace(/-+$/, "");
+
+  return base || "organization";
+}
+
+/**
+ * Postgres reports unique-constraint violations with SQLSTATE 23505, which Bun
+ * surfaces as `errno` on its Postgres errors.
+ */
+function isUniqueViolation(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "errno" in error &&
+    error.errno === "23505"
+  );
+}
 
 const getOrganizationsFiltersSchema = z.object({
   userId: z.uuid().optional(),
@@ -33,6 +68,21 @@ const getOrganizationByIdResponseSchema = z.object({
 
 type GetOrganizationByIdResponse = z.infer<
   typeof getOrganizationByIdResponseSchema
+>;
+
+type CreateOrganizationProps = {
+  userId: string;
+  name: string;
+  logo?: string | null;
+  description?: string | null;
+};
+
+const createOrganizationResponseSchema = z.object({
+  organization: selectOrganizationSchema,
+});
+
+type CreateOrganizationResponse = z.infer<
+  typeof createOrganizationResponseSchema
 >;
 
 /**
@@ -77,6 +127,61 @@ class OrganizationsService {
   }
 
   /**
+   * Creates an organization and its first membership in a single transaction,
+   * making `userId` the organization owner.
+   *
+   * Slugs are server-generated (`slugify` + random suffix) and retried when a
+   * concurrent create claims the same value.
+   */
+  async createOrganization(
+    props: CreateOrganizationProps,
+  ): Promise<CreateOrganizationResponse> {
+    const slugBase = toOrganizationSlugBase(props.name);
+
+    for (let attempt = 0; attempt < ORGANIZATION_SLUG_ATTEMPTS; attempt++) {
+      const slug = `${slugBase}-${nanoid(ORGANIZATION_SLUG_SUFFIX_LENGTH)}`;
+
+      try {
+        return await this.db.transaction(async (tx) => {
+          const [organization] = await tx
+            .insert(organizations)
+            .values({
+              name: props.name,
+              slug,
+              logo: props.logo ?? null,
+              description: props.description ?? null,
+            })
+            .returning();
+
+          if (!organization) {
+            throw new InternalError("organization insert returned no row");
+          }
+
+          await tx.insert(organizationMembers).values({
+            organizationId: organization.id,
+            userId: props.userId,
+            role: "owner",
+            addedBy: props.userId,
+          });
+
+          return { organization };
+        });
+      } catch (error) {
+        if (
+          attempt < ORGANIZATION_SLUG_ATTEMPTS - 1 &&
+          isUniqueViolation(error)
+        ) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw new InternalError("could not generate a unique organization slug");
+  }
+
+  /**
    * Returns a single organization by id, or null when it does not exist.
    */
   async getOrganizationById(
@@ -98,10 +203,13 @@ export type {
   GetOrganizationsResponse,
   GetOrganizationByIdProps,
   GetOrganizationByIdResponse,
+  CreateOrganizationProps,
+  CreateOrganizationResponse,
 };
 export {
   getOrganizationsFiltersSchema,
   getOrganizationsResponseSchema,
   getOrganizationByIdResponseSchema,
+  createOrganizationResponseSchema,
   OrganizationsService,
 };
