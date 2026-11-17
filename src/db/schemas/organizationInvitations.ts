@@ -3,10 +3,11 @@ import {
   uuid,
   varchar,
   timestamp,
-  unique,
+  uniqueIndex,
   text,
   snakeCase,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createSchemaFactory } from "drizzle-orm/zod";
 import { z } from "@hono/zod-openapi";
 import { organizations } from "./organizations";
@@ -14,7 +15,7 @@ import { user } from "../../../auth-schema";
 
 const organizationInvitationStatusEnum = pgEnum(
   "organization_invitation_status",
-  ["pending", "accepted", "declined"],
+  ["pending", "accepted", "declined", "expired", "revoked"],
 );
 
 type OrganizationInvitation = typeof organizationInvitations.$inferSelect;
@@ -29,26 +30,25 @@ const organizationInvitations = snakeCase.table(
       .references(() => organizations.id, {
         onDelete: "cascade",
       }),
-    userId: text("user_id")
+    invitedBy: text("invited_by")
       .notNull()
       .references(() => user.id, {
         onDelete: "cascade",
       }),
-    email: varchar("email", { length: 255 }).notNull(),
+    invitedUserEmail: varchar("invited_user_email", { length: 255 }).notNull(),
     status: organizationInvitationStatusEnum("status")
       .default("pending")
       .notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     acceptedAt: timestamp("accepted_at", { withTimezone: true }),
-    createAt: timestamp("create_at", { withTimezone: true })
+    createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => [
-    unique("organization_invitations_org_email_unique").on(
-      table.organizationId,
-      table.email,
-    ),
+    uniqueIndex("organization_invitations_pending_unique")
+      .on(table.organizationId, table.invitedUserEmail)
+      .where(sql`${table.status} = 'pending'`),
   ],
 );
 
