@@ -3,11 +3,12 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { db } from "./db/connect";
 import { username, openAPI } from "better-auth/plugins";
+import * as authSchema from "../auth-schema";
 
 const SESSION_REFRESH_THRESHOLD_S = 60 * 5; // 5 minutes
 const SESSION_EXPIRE_S = 60 * 60 * 24;
 export const auth = betterAuth({
-  database: drizzleAdapter(db, { provider: "pg" }),
+  database: drizzleAdapter(db, { provider: "pg", schema: authSchema }),
   emailAndPassword: {
     enabled: true,
   },

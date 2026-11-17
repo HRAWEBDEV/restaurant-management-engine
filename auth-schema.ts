@@ -1,5 +1,10 @@
 import { relations } from "drizzle-orm/_relations";
 import { pgTable, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { z } from "@hono/zod-openapi";
+import { createSchemaFactory } from "drizzle-orm/zod";
+
+type User = typeof user.$inferSelect;
+type InsertUser = typeof user.$inferInsert;
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -14,6 +19,47 @@ export const user = pgTable("user", {
   username: text("username").unique(),
   displayUsername: text("display_username"),
 });
+
+const { createSelectSchema, createInsertSchema, createUpdateSchema } =
+  createSchemaFactory({
+    zodInstance: z,
+  });
+const selectUserSchema = createSelectSchema(user);
+const insertUserSchema = createInsertSchema(user).omit({
+  id: true,
+  emailVerified: true,
+  createdAt: true,
+  updatedAt: true,
+  displayUsername: true,
+});
+const updateUserSchema = createUpdateSchema(user).pick({
+  name: true,
+  email: true,
+  username: true,
+  image: true,
+});
+const signUpWithEmailSchema = insertUserSchema
+  .omit({ image: true })
+  .extend({
+    name: z.string().min(1).max(100).openapi({ example: "Jane Doe" }),
+    email: z.email().openapi({ example: "jane@example.com" }),
+    password: z.string().min(8).max(128).openapi({ example: "supersecret" }),
+    username: z
+      .string()
+      .min(3)
+      .max(30)
+      .regex(/^[a-zA-Z0-9_.]+$/)
+      .optional()
+      .openapi({ example: "jane.doe" }),
+  })
+  .openapi({
+    example: {
+      name: "Jane Doe",
+      email: "jane@example.com",
+      password: "supersecret",
+      username: "jane.doe",
+    },
+  });
 
 export const session = pgTable(
   "session",
@@ -91,3 +137,11 @@ export const accountRelations = relations(account, ({ one }) => ({
     references: [user.id],
   }),
 }));
+
+export type { User, InsertUser };
+export {
+  selectUserSchema,
+  insertUserSchema,
+  updateUserSchema,
+  signUpWithEmailSchema,
+};

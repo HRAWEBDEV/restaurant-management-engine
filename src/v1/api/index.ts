@@ -1,5 +1,6 @@
 import { swaggerUI } from "@hono/swagger-ui";
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
+import { authRoutes } from "./routes/auth";
 
 const checkHealth = createRoute({
   method: "get",
@@ -34,5 +35,7 @@ apiV1Routes.get(
     url: "/api/v1/doc",
   }),
 );
+
+apiV1Routes.route("/", authRoutes);
 
 export { apiV1Routes };
