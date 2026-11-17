@@ -200,17 +200,29 @@ Zod exports:
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | `uuid` PK | |
-| `workspace_id` | `uuid` not null → `workspaces.id` | `ON DELETE CASCADE` |
-| `organization_member_id` | `uuid` not null → `organization_members.id` | `ON DELETE CASCADE` |
+| `workspace_id` | `uuid` not null | One half of the composite FK to `workspaces (id, organization_id)` |
+| `organization_member_id` | `uuid` not null | One half of the composite FK to `organization_members (id, organization_id)` |
+| `organization_id` | `uuid` not null | Tenant key; must match **both** the workspace's and the member's organization |
 | `role` | `workspace_roles` not null default `'member'` | Enum: `admin`, `member` |
 | `joined_at` | `timestamptz` not null default `now()` | |
 | `added_by` | `text` → `user.id` | `ON DELETE SET NULL` |
 
 Unique: `workspace_members_unique (organization_member_id, workspace_id)`.
 
+Cross-organization rows are impossible. `(workspace_id, organization_id)` references
+`workspaces (id, organization_id)` and `(organization_member_id, organization_id)` references
+`organization_members (id, organization_id)`; a row whose member belongs to a different organization
+than the workspace violates one of the two composite FKs. The parent tables therefore carry
+`workspaces_id_organization_id_unique` and `organization_members_id_organization_id_unique`.
+
+A further consequence: `workspaces.organization_id` cannot be changed while workspace members exist —
+the composite FK rejects the update instead of silently orphaning rows. Move a workspace between
+organizations by deleting/migrating its members first.
+
 Zod exports: `insertWorkspaceMemberSchema` (role overridden with `z.enum(workspaceRoles)`; omits
-`id`, `joinedAt`), `upadteWorkspaceMemberSchema` (**sic** — typo in the exported name,
-`pick({ id, role })`), `workspaceRoles`, and the enum exported as `roleEnum`.
+`id`, `joinedAt`, and `organizationId`, which the service derives from the workspace),
+`upadteWorkspaceMemberSchema` (**sic** — typo in the exported name, `pick({ id, role })`),
+`workspaceRoles`, and the enum exported as `roleEnum`.
 
 There is no `owner` workspace role. The organization `owner` is expected to be implicitly
 authorized on every workspace in the organization.
@@ -226,8 +238,8 @@ authorized on every workspace in the organization.
 | `organizations` → `organization_invitations` | 1:N | cascade |
 | `user` → `organization_invitations` (as inviter) | 1:N | cascade |
 | `organizations` → `workspaces` | 1:N | cascade |
-| `organization_members` → `workspace_members` | 1:N | cascade |
-| `workspaces` → `workspace_members` | 1:N | cascade |
+| `organization_members` → `workspace_members` | 1:N | cascade (composite key with `organization_id`) |
+| `workspaces` → `workspace_members` | 1:N | cascade (composite key with `organization_id`) |
 
 Only the Better Auth tables declare Drizzle `relations()` (`userRelations`, `sessionRelations`,
 `accountRelations`). **No domain schema exports relations**, so `db.query.organizations...`-style
@@ -343,7 +355,10 @@ desired role and `added_by` set to the acting user.
 ### 6. Add an organization member to a workspace
 
 1. Resolve the target's `organization_members.id` for the target workspace's organization.
-2. `INSERT workspace_members (workspace_id, organization_member_id, role, added_by)`.
+2. `INSERT workspace_members (workspace_id, organization_member_id, organization_id, role, added_by)`,
+   deriving `organization_id` from the workspace (never from the client).
+3. The composite FKs reject the row if the member or the workspace does not belong to that
+   organization, so a service-level check is only needed for a friendlier error message.
 
 Adding a user straight to a workspace without an organization membership is not possible — the FK
 requires the membership row.
@@ -414,6 +429,8 @@ Enforced by the database today:
 - One workspace assignment per `(organization_member_id, workspace_id)`.
 - At most one **pending** invitation per `(organization_id, invited_user_email)`; rows in terminal
   statuses (`accepted`, `declined`, `expired`, `revoked`) are retained as history.
+- A workspace member always belongs to the same organization as the workspace (composite FKs), and a
+  workspace cannot change organization while it has members.
 - Organization and workspace slugs are globally unique.
 - Deleting an organization, workspace, or organization member cleans up dependent rows by cascade.
 - Invitations are addressed to an email, so the invitee does not need an account to be invited.
@@ -422,8 +439,6 @@ Expected but **not** enforced:
 
 - An organization always has at least one `owner`.
 - An organization has at most one `owner` (nothing stops several).
-- `workspace_members.organization_member_id` belongs to the workspace's own organization. The FKs
-  are independent, so a cross-organization assignment is syntactically valid.
 - `workspaces.created_by` and `added_by` are members of the relevant organization.
 - Stale pending invitations are transitioned to `expired` lazily on read or on the next invite; there
   is no scheduler.
@@ -452,9 +467,9 @@ Schema-level issues worth fixing before the module is built out:
    manual joins.
 6. **Missing indexes.** Add `organization_members (user_id)` (currently only covered as the second
    column of the unique index), `organization_invitations (invited_user_email, status)`,
-   `organization_invitations (invited_by)`, `workspaces (organization_id)`, and
-   `workspace_members (workspace_id)`. The partial pending index already covers
-   `(organization_id, invited_user_email)` for pending rows.
+   `organization_invitations (invited_by)`, `workspaces (organization_id)`,
+   `workspace_members (workspace_id)`, and `workspace_members (organization_id)`. The partial
+   pending index already covers `(organization_id, invited_user_email)` for pending rows.
 7. **Orphan risk on ownership.** With ownership expressed only as a member row, deleting the last
    owner (or the owner's account) leaves an organization nobody can administer. Enforce "at least
    one owner" in the service layer, or transfer ownership explicitly on removal.

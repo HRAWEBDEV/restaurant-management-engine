@@ -5,6 +5,7 @@ import {
   timestamp,
   snakeCase,
   text,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 import { createSchemaFactory } from "drizzle-orm/zod";
 import { z } from "@hono/zod-openapi";
@@ -22,16 +23,9 @@ const workspaceMembers = snakeCase.table(
   "workspace_members",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    workspaceId: uuid("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, {
-        onDelete: "cascade",
-      }),
-    organizationMemberId: uuid("organization_member_id")
-      .notNull()
-      .references(() => organizationMembers.id, {
-        onDelete: "cascade",
-      }),
+    workspaceId: uuid("workspace_id").notNull(),
+    organizationMemberId: uuid("organization_member_id").notNull(),
+    organizationId: uuid("organization_id").notNull(),
     role: roleEnum("role").notNull().default("member"),
     joinedAt: timestamp("joined_at", { withTimezone: true })
       .notNull()
@@ -45,6 +39,19 @@ const workspaceMembers = snakeCase.table(
       table.organizationMemberId,
       table.workspaceId,
     ),
+    foreignKey({
+      name: "workspace_members_workspace_org_fkey",
+      columns: [table.workspaceId, table.organizationId],
+      foreignColumns: [workspaces.id, workspaces.organizationId],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "workspace_members_member_org_fkey",
+      columns: [table.organizationMemberId, table.organizationId],
+      foreignColumns: [
+        organizationMembers.id,
+        organizationMembers.organizationId,
+      ],
+    }).onDelete("cascade"),
   ],
 );
 
@@ -58,6 +65,7 @@ const insertWorkspaceMemberSchema = createInsertSchema(workspaceMembers, {
 }).omit({
   id: true,
   joinedAt: true,
+  organizationId: true,
 });
 const upadteWorkspaceMemberSchema = createUpdateSchema(workspaceMembers, {
   role: z.enum(workspaceRoles),

@@ -44,6 +44,10 @@ const organizationMembers = snakeCase.table(
       table.organizationId,
       table.userId,
     ),
+    unique("organization_members_id_organization_id_unique").on(
+      table.id,
+      table.organizationId,
+    ),
   ],
 );
 
