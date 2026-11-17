@@ -1,5 +1,6 @@
 import { swaggerUI } from "@hono/swagger-ui";
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
+import { authMiddleware } from "../../middlewares/authMiddleware";
 import { authRoutes } from "./routes/auth";
 
 const checkHealth = createRoute({
@@ -37,5 +38,8 @@ apiV1Routes.get(
 );
 
 apiV1Routes.route("/", authRoutes);
+
+// every route registered after this line requires a signed in user
+apiV1Routes.use(authMiddleware);
 
 export { apiV1Routes };
