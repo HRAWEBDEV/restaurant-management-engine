@@ -1,5 +1,6 @@
 import { z } from "@hono/zod-openapi";
 import { and, asc, eq, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import type { DBExecutor } from "../db/connect";
 import {
   ogMemberRoles,
@@ -30,11 +31,14 @@ const organizationMemberWithRelationsSchema = z.object({
   member: selectOrganizationMemberSchema,
   organization: selectOrganizationSchema,
   user: selectUserSchema,
+  addedByUser: selectUserSchema.nullable(),
 });
 
 const getOrganizationMembersResponseSchema = z.object({
   members: z.array(organizationMemberWithRelationsSchema),
 });
+
+const addedByUser = alias(user, "added_by_user");
 
 type GetOrganizationMembersResponse = z.infer<
   typeof getOrganizationMembersResponseSchema
@@ -51,8 +55,8 @@ class OrganizationMembersService {
 
   /**
    * Returns the memberships of an organization, oldest join first, joined with
-   * the organization and the member's user row. Optionally narrowed by user or
-   * role.
+   * the organization, the member's user row, and the user who added them
+   * (`addedByUser`, null when unknown). Optionally narrowed by user or role.
    */
   async getOrganizationMembers(
     props: GetOrganizationMembersProps,
@@ -76,6 +80,7 @@ class OrganizationMembersService {
         member: organizationMembers,
         organization: organizations,
         user,
+        addedByUser,
       })
       .from(organizationMembers)
       .innerJoin(
@@ -83,6 +88,7 @@ class OrganizationMembersService {
         eq(organizationMembers.organizationId, organizations.id),
       )
       .innerJoin(user, eq(organizationMembers.userId, user.id))
+      .leftJoin(addedByUser, eq(organizationMembers.addedBy, addedByUser.id))
       .where(and(...filterConditions))
       .orderBy(asc(organizationMembers.joinedAt));
 
