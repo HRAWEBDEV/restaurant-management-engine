@@ -44,6 +44,21 @@ type GetOrganizationMembersResponse = z.infer<
   typeof getOrganizationMembersResponseSchema
 >;
 
+const updateOrganizationRoleSchema = z.object({
+  id: z.uuid(),
+  role: z.enum(ogMemberRoles),
+});
+
+type UpdateOrganizationRoleProps = z.infer<typeof updateOrganizationRoleSchema>;
+
+const updateOrganizationRoleResponseSchema = z.object({
+  member: selectOrganizationMemberSchema.nullable(),
+});
+
+type UpdateOrganizationRoleResponse = z.infer<
+  typeof updateOrganizationRoleResponseSchema
+>;
+
 /**
  * Data access service for organization memberships.
  *
@@ -94,16 +109,36 @@ class OrganizationMembersService {
 
     return { members };
   }
+
+  /**
+   * Updates the role of an organization membership by id, returning the updated
+   * row or null when the membership does not exist.
+   */
+  async updateOrganizationRole(
+    props: UpdateOrganizationRoleProps,
+  ): Promise<UpdateOrganizationRoleResponse> {
+    const [member] = await this.db
+      .update(organizationMembers)
+      .set({ role: props.role })
+      .where(eq(organizationMembers.id, props.id))
+      .returning();
+
+    return { member: member ?? null };
+  }
 }
 
 export type {
   GetOrganizationMembersFilters,
   GetOrganizationMembersProps,
   GetOrganizationMembersResponse,
+  UpdateOrganizationRoleProps,
+  UpdateOrganizationRoleResponse,
 };
 export {
   getOrganizationMembersFiltersSchema,
   organizationMemberWithRelationsSchema,
   getOrganizationMembersResponseSchema,
+  updateOrganizationRoleSchema,
+  updateOrganizationRoleResponseSchema,
   OrganizationMembersService,
 };
