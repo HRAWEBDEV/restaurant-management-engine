@@ -2,7 +2,9 @@
 
 `restaurant-manager-api` is a Bun-native, multi-tenant HTTP API for restaurant operations
 (catalog, floor, orders, kitchen, inventory, staff, payments, reporting). It is early-stage:
-auth + tenancy schema/routes exist; most operational domain modules are not built yet.
+auth routes, the full tenancy schema (organizations, workspaces, members, invitations, activity
+logs), services for those aggregates, and a permissions scaffold exist; most operational
+domain modules and their HTTP routes are not built yet.
 
 Design/scope lives in the docs — load them only when the task needs them:
 
@@ -35,10 +37,12 @@ src/db/connect.ts             Bun.SQL client + drizzle; exports db, DBExecutor, 
 src/db/schemas/*.ts           one file per table: table + Zod schemas + types
 src/db/utils/trackChanges.ts  created_at / updated_at columns
 src/middlewares/              authMiddleware (session -> context, 401 NOT_SIGNED_IN)
-src/services/                 DB-access classes (e.g. OrganizationsService)
-src/utils/                    AuthContext helpers, InternalError, NotFoundError
+src/services/                 DB-access classes (organizations, workspaces, organization members, activity logger)
+src/utils/                    AuthContext helpers, error classes (InternalError, NotFoundError, ForbiddenError)
+src/utils/roles-permissions/  per-role permission strings + checkLevelPermissions
+src/utils/activityLoggerHelpers.ts  defineActivity / buildChanges / renderSummary audit helpers
 src/v1/api/index.ts           /api/v1 router: health, /doc, /doc/ui, auth routes, auth guard, 404/onError
-src/v1/api/routes/*.ts        route modules per domain
+src/v1/api/routes/*.ts        route modules per domain (only auth wired today)
 src/v1/utils/apiErrorResponse.ts  errorResponseSchema + createErrorResponse
 auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 ```
@@ -98,19 +102,32 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   requiring organization membership. `owner`/`admin` implicitly access all org workspaces.
 - Invitations: one pending row per `(organization_id, invited_user_email)` enforced by a partial
   unique index; terminal statuses are kept as history. No scheduler — expire lazily on read.
-- Per the docs, reports and tickets are derived projections of domain events, and every state
-  change emits an event plus an append-only audit entry. Design new modules with that in mind.
+- Permissions: namespaced strings (`resource:action` / `resource:sub:action`) declared per role in
+  `src/utils/roles-permissions/`. Two levels (organization, workspace) plus `organizationWorkspace`
+  (either level grants). Check with `checkLevelPermissions(...)`, passing roles resolved from
+  membership rows — never client input. Only `owner` (org) and `admin` (workspace) roles are
+  defined so far, and no route enforces them yet.
+- Audit: every state change should write an append-only `activity_logs` row via `ActivityLogger`
+  (constructed with the same transaction as the mutation), with a diff built from a
+  `defineActivity(...)` allowlist. Reports and tickets remain derived projections of domain
+  events; event emission is not implemented yet.
 
 ## Known issues (fix only when touching that module)
 
 - Duplicate `roleEnum` export in `organizationMembers.ts` and `workspaceMembers.ts`.
 - Misspelled `upadteWorkspaceMemberSchema` in `workspaceMembers.ts`.
-- Some insert schemas expose server-managed fields (`status`, `invitedBy`, `addedBy`,
-  `role: "owner"`) — narrow them at the route layer.
+- `insertOrganizationInvitationSchema` is not narrowed (exposes `id`, `invitedBy`, `status`,
+  `acceptedAt`, `createdAt`); the member insert schemas still expose `addedBy`. Narrow these at
+  the route layer and always set `invitedBy`/`addedBy` from the session.
+- Permissions are declared but not enforced anywhere: `checkLevelPermissions` exists but no route
+  or service calls it, and `AuthContext`'s `userOrganizationMember` / `userWorkspaceMemberRole`
+  keys are declared but never populated by `authMiddleware`.
+- Organization/workspace/member services exist but no routes are mounted for them yet (only
+  `/auth/*` is wired); `ActivityLogger` is defined but not called from any service.
 - Domain tables lack `relations()` and several indexes (see `docs/user_space.md` § Known gaps).
 - "At least one organization owner" is not enforced anywhere.
-- `insertOrganizationInvitationSchema` is not narrowed; invitation acceptance still needs
-  verified-email matching and a "not already a member" check in the service.
+- Invitation acceptance still needs verified-email matching and a "not already a member" check in
+  the service.
 
 ## Environment and runtime
 
