@@ -74,6 +74,13 @@ database from `DATABASE_URL` so it follows the local configuration. Test data
 factories (`createTestUser`, `createTestOrganization`, `createTestWorkspace`,
 `addOrganizationMember`) live in `src/db/__tests__/helpers/factories.ts`.
 
+Code that uses the shared `db` instance (route handlers, Better Auth) is
+pointed at the test database by `src/db/__tests__/helpers/envPreload.ts`, which
+`bun test` loads via `--preload` before any module reads `DATABASE_URL`.
+Because of this, always run tests through `bun run test` — running
+`bun test <file>` directly skips the preload and would hit the development
+database.
+
 ## 6. DB tests are isolated by unique data, not by truncation
 
 `bun test` runs all files in one process with shared module state. Two

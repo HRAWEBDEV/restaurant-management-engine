@@ -7,7 +7,7 @@
     "dev": "NODE_ENV=development bun run --watch --check ./src/index.ts",
     "typecheck": "bunx tsc --noEmit",
     "test:setup": "bun src/db/__tests__/setupDb.ts",
-    "test": "bun run test:setup && bun test",
+    "test": "bun run test:setup && bun test --preload ./src/db/__tests__/helpers/envPreload.ts",
     "db:generate": "bunx --bun drizzle-kit generate",
     "db:migrate": "bunx --bun drizzle-kit migrate",
     "auth:generate": "bun x --bun auth@latest generate"
