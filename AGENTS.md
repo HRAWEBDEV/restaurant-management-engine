@@ -2,9 +2,9 @@
 
 `restaurant-manager-api` is a Bun-native, multi-tenant HTTP API for restaurant operations
 (catalog, floor, orders, kitchen, inventory, staff, payments, reporting). It is early-stage:
-auth routes, the full tenancy schema (organizations, workspaces, members, invitations, activity
-logs), services for those aggregates, and a permissions scaffold exist; most operational
-domain modules and their HTTP routes are not built yet.
+auth and organization routes, the full tenancy schema (organizations, workspaces, members,
+invitations, activity logs), services for those aggregates, and a permissions scaffold exist;
+workspace/member routes and most operational domain modules are not built yet.
 
 Design/scope lives in the docs — load them only when the task needs them:
 
@@ -37,12 +37,17 @@ src/db/connect.ts             Bun.SQL client + drizzle; exports db, DBExecutor, 
 src/db/schemas/*.ts           one file per table: table + Zod schemas + types
 src/db/utils/trackChanges.ts  created_at / updated_at columns
 src/middlewares/              authMiddleware (session -> context, 401 NOT_SIGNED_IN)
-src/services/                 DB-access classes (organizations, workspaces, organization members, activity logger)
-src/utils/                    AuthContext helpers, error classes (InternalError, NotFoundError, ForbiddenError)
+src/services/                 DB-access classes (organizations, workspaces, organization members,
+                              accounts orchestrates organization + default workspace, users)
+src/utils/                    AuthContext helpers, error classes (InternalError, NotFoundError,
+                              ForbiddenError), AssetStorage (save/remove files under static/)
 src/utils/roles-permissions/  per-role permission strings + checkLevelPermissions
 src/utils/activityLoggerHelpers.ts  defineActivity / buildChanges / renderSummary audit helpers
-src/v1/api/index.ts           /api/v1 router: health, /doc, /doc/ui, auth routes, auth guard, 404/onError
-src/v1/api/routes/*.ts        route modules per domain (only auth wired today)
+src/utils/activityDefinitions.ts    per-entity audit definitions (organizationActivity, workspaceActivity)
+src/v1/api/index.ts           /api/v1 router: health, /doc, /doc/ui, auth routes, auth guard,
+                              organizations routes, 404/onError
+src/v1/api/routes/*.ts        route modules per domain (auth and organizations wired today)
+static/                       served at /static/* (serveStatic); uploaded assets, not committed
 src/v1/utils/apiErrorResponse.ts  errorResponseSchema + createErrorResponse
 auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 ```
@@ -77,7 +82,13 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 - Define the contract first: `createRoute({ method, path, tags, request, responses })`, then
   register with `router.openapi(route, handler)`.
 - Document every status code, including errors, using `errorResponseSchema`.
-- Read validated input via `c.req.valid("json" | "param" | "query")`.
+- Read validated input via `c.req.valid("json" | "param" | "query" | "form")` (form for file
+  uploads, e.g. the logo route).
+- File uploads: multipart bodies with a `z.file().mime([...]).max(bytes)` field that needs an
+  explicit `.openapi({ type: "string", format: "binary" })` for document generation; save via an
+  `AssetStorage` instance configured per location (`subPath`, allowed MIME types, max size).
+  `save` returns `{ ok: false, error }` for expected failures — map it to a 400 with
+  `createErrorResponse`, and never let a failed removal of a replaced file fail the request.
 - Errors: throw `NotFoundError` / `InternalError`, or return `createErrorResponse(...)` with a
   status. Unexpected errors are logged by the global `onError`.
 - Auth: `getContextUser(c)` / `getContextSession(c)`, typed as `{ Variables: AuthContext }`.
@@ -91,8 +102,12 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 
 - One class per aggregate, constructor `private readonly db: DBExecutor` so it works inside
   `db.transaction(...)`.
+- Cross-aggregate flows (e.g. account setup) get an orchestration service that composes the
+  aggregate services with the same db/transaction executor (`AccountsService` pattern).
 - Export prop/response types and their schemas. Return DTO objects (`{ organizations }`) and
-  `null` for missing rows instead of throwing.
+  `null` for missing rows instead of throwing. Lookup services used for authorization may
+  return extra context (e.g. `getOrganizationById` also returns the caller's membership row) —
+  prefer reusing that over a second query.
 - Authorization, slug generation, and server-managed fields are decided in the route/service
   layer, not in Zod schemas.
 
@@ -100,6 +115,11 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 
 - Tenancy: `user` -> `organization_members` -> `workspace_members`, with workspace membership
   requiring organization membership. `owner`/`admin` implicitly access all org workspaces.
+- Account setup has two entry points, both via `AccountsService`: `POST /api/v1/auth/account`
+  (public — signs the user up, then creates organization + default workspace + session cookies)
+  and `POST /api/v1/organizations/account` (signed-in user). Both create the organization with
+  the caller as `owner` and a default workspace (name defaults to the organization name) with
+  the caller as workspace `admin`.
 - Invitations: one pending row per `(organization_id, invited_user_email)` enforced by a partial
   unique index; terminal statuses are kept as history. No scheduler — expire lazily on read.
 - Permissions: namespaced strings (`resource:action` / `resource:sub:action`) declared per role in
@@ -109,9 +129,10 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   grants so far (`organizationPermissions` also keys `admin`/`member` with empty lists to match
   the `organization_roles` enum); only the organization update routes enforce them so far.
 - Audit: every state change should write an append-only `activity_logs` row via `ActivityLogger`
-  (constructed with the same transaction as the mutation), with a diff built from a
-  `defineActivity(...)` allowlist. Reports and tickets remain derived projections of domain
-  events; event emission is not implemented yet.
+  (constructed with the same transaction as the mutation), calling `recordChange(...)` with the
+  entity's definition from `src/utils/activityDefinitions.ts` (e.g. `organizationActivity`),
+  whose `diff` allowlist is declared with `defineActivity(...)`. Reports and tickets remain
+  derived projections of domain events; event emission is not implemented yet.
 
 ## Known issues (fix only when touching that module)
 
@@ -125,8 +146,9 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   `organization_members` row). No other route or service enforces permissions yet, and
   `AuthContext`'s `userOrganizationMember` / `userWorkspaceMemberRole` keys are declared but never
   populated by `authMiddleware`.
-- Organization/workspace/member services exist but no routes are mounted for them yet (only
-  `/auth/*` is wired); `ActivityLogger` is defined but not called from any service.
+- Workspace/member/invitation services exist but have no routes yet (auth and organizations are
+  the wired domains). `ActivityLogger` is called from the organizations and workspaces services
+  only; members and invitations write no audit rows yet.
 - Domain tables lack `relations()` and several indexes (see `docs/user_space.md` § Known gaps).
 - "At least one organization owner" is not enforced anywhere.
 - Invitation acceptance still needs verified-email matching and a "not already a member" check in
@@ -146,6 +168,8 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 - New table/column -> `src/db/schemas/<name>.ts`, then `bun run db:generate` + `db:migrate`.
 - New endpoint -> `src/v1/api/routes/<domain>.ts` (contract + handler) + `src/services/<domain>Service.ts`,
   then mount it in `src/v1/api/index.ts` before `use(authMiddleware)` if it is public.
+- New file upload location -> an `AssetStorage` instance in the route module (or service) with
+  the appropriate `subPath`, MIME allowlist, and max size; assets must be removed when replaced.
 - New error type -> a class in `src/utils/` with `code`, `name`, and `handle(c)`, registered in
   the `onError` chain.
 - Tenancy/auth behavior -> check `docs/user_space.md` before changing anything.
