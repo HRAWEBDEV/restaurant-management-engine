@@ -5,6 +5,7 @@ import { ForbiddenError } from "../../utils/ForbiddenError";
 import { InternalError } from "../../utils/InternalError";
 import { NotFoundError } from "../../utils/NotFoundError";
 import { authRoutes } from "./routes/auth";
+import { organizationsRoutes } from "./routes/organizations";
 
 const checkHealth = createRoute({
   method: "get",
@@ -44,6 +45,8 @@ apiV1Routes.route("/", authRoutes);
 
 // every route registered after this line requires a signed in user
 apiV1Routes.use(authMiddleware);
+
+apiV1Routes.route("/", organizationsRoutes);
 
 // global error handling, keep this after all routes
 apiV1Routes.notFound((c) => new NotFoundError().handle(c));

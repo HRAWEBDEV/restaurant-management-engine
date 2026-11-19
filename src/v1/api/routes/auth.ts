@@ -5,11 +5,15 @@ import {
   signInWithEmailSchema,
   signUpWithEmailSchema,
 } from "../../../../auth-schema";
+import { createAccountResponseSchema } from "../../../services/accountsService";
 import {
   createErrorResponse,
   errorResponseSchema,
 } from "../../utils/apiErrorResponse";
+import { StatusCodes } from "http-status-codes";
 import { auth } from "../../../auth";
+import { db } from "../../../db/connect";
+import { AccountsService } from "../../../services/accountsService";
 
 const authRoutes = new OpenAPIHono().basePath("/auth");
 
@@ -206,6 +210,116 @@ authRoutes.openapi(signInWithEmailRoute, async (c) => {
           code: error.body?.code,
         }),
         status,
+      );
+    }
+
+    throw error;
+  }
+});
+
+const createAccountWithOrganizationSchema = z.object({
+  user: signUpWithEmailSchema,
+  organization: z.object({
+    name: z.string().min(1).max(100).openapi({ example: "Bella Vista" }),
+    logo: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+  }),
+  workspace: z
+    .object({
+      name: z.string().min(1).max(100).optional(),
+      description: z.string().nullable().optional(),
+    })
+    .optional(),
+});
+
+const createAccountWithOrganizationResponseSchema = z.object({
+  user: selectUserSchema,
+  ...createAccountResponseSchema.shape,
+});
+
+const createAccountWithOrganizationRoute = createRoute({
+  method: "post",
+  path: "/account",
+  tags: ["auth"],
+  summary: "Create a user account with an organization and default workspace",
+  description:
+    "Signs the user up, creates their organization (owner membership included) and a default workspace (admin membership included), then attaches the auth session cookies.",
+  request: {
+    body: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: createAccountWithOrganizationSchema,
+        },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: "Account, organization and default workspace created",
+      content: {
+        "application/json": {
+          schema: createAccountWithOrganizationResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: "Invalid input or username already taken",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    422: {
+      description: "User already exists or could not be created",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+authRoutes.openapi(createAccountWithOrganizationRoute, async (c) => {
+  const body = c.req.valid("json");
+
+  try {
+    const { headers, response } = await auth.api.signUpEmail({
+      body: body.user,
+      headers: c.req.raw.headers,
+      returnHeaders: true,
+    });
+
+    for (const cookie of headers.getSetCookie()) {
+      c.header("Set-Cookie", cookie, { append: true });
+    }
+
+    const { organization, workspace } = await new AccountsService(db).create({
+      userId: response.user.id,
+      organization: body.organization,
+      workspace: body.workspace,
+    });
+
+    return c.json(
+      {
+        user: toAuthUser(response.user),
+        organization,
+        workspace,
+      },
+      StatusCodes.CREATED,
+    );
+  } catch (error) {
+    if (isAPIError(error)) {
+      return c.json(
+        createErrorResponse({
+          message: error.body?.message ?? error.message,
+          code: error.body?.code,
+        }),
+        error.statusCode === 422
+          ? StatusCodes.UNPROCESSABLE_ENTITY
+          : StatusCodes.BAD_REQUEST,
       );
     }
 
