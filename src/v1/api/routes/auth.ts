@@ -217,6 +217,70 @@ authRoutes.openapi(signInWithEmailRoute, async (c) => {
   }
 });
 
+const signOutResponseSchema = z.object({
+  success: z.boolean(),
+});
+
+const signOutRoute = createRoute({
+  method: "post",
+  path: "/sign-out",
+  tags: ["auth"],
+  summary: "Sign out the current session",
+  description:
+    "Revokes the current auth session and clears the session cookies.",
+  responses: {
+    200: {
+      description: "Session signed out",
+      content: {
+        "application/json": {
+          schema: signOutResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: "Session could not be revoked",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+authRoutes.openapi(signOutRoute, async (c) => {
+  try {
+    const { headers, response } = await auth.api.signOut({
+      body: {},
+      headers: c.req.raw.headers,
+      returnHeaders: true,
+    });
+
+    for (const cookie of headers.getSetCookie()) {
+      c.header("Set-Cookie", cookie, { append: true });
+    }
+
+    return c.json(
+      {
+        success: response.success,
+      },
+      200,
+    );
+  } catch (error) {
+    if (isAPIError(error)) {
+      return c.json(
+        createErrorResponse({
+          message: error.body?.message ?? error.message,
+          code: error.body?.code,
+        }),
+        StatusCodes.BAD_REQUEST,
+      );
+    }
+
+    throw error;
+  }
+});
+
 const createAccountWithOrganizationSchema = z.object({
   user: signUpWithEmailSchema,
   organization: z.object({
