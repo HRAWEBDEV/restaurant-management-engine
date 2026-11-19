@@ -54,7 +54,8 @@ function hasPermission(
   role: WorkspaceRole,
   permission: WorkspacePermission,
 ): boolean {
-  return (workspacePermissions[role] as readonly string[]).includes(permission);
+  const grants = workspacePermissions[role] as readonly string[] | undefined;
+  return grants?.includes(permission) ?? false;
 }
 
 export type { WorkspaceRole, WorkspacePermission };

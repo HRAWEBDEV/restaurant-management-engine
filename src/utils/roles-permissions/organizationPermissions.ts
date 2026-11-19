@@ -45,9 +45,8 @@ function hasPermission(
   role: OrganizationRole,
   permission: OrganizationPermission,
 ): boolean {
-  return (organizationPermissions[role] as readonly string[]).includes(
-    permission,
-  );
+  const grants = organizationPermissions[role] as readonly string[] | undefined;
+  return grants?.includes(permission) ?? false;
 }
 
 export type { OrganizationRole, OrganizationPermission };
