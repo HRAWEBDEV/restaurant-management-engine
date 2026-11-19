@@ -60,3 +60,40 @@ validation, and handlers exactly as production runs them.
 Tooling: `bun:test` only. Run with `bun run test`, watch with
 `bun test --watch`, coverage with `bun test --coverage` (exclude generated
 artifacts such as `drizzle/**` and `auth-schema.ts`).
+
+## 5. DB-backed tests use the dedicated test database
+
+Tests that touch the database never run against the development database.
+`bun run test:setup` (runs automatically before `bun test` via the `test`
+script) creates `restaurant_manager_app_test` — the development database name
+plus `_test` — applies all migrations to it with drizzle-kit, and truncates
+every application table so the suite starts clean. The harness in
+`src/db/__tests__/helpers/db.ts` exports the ready-to-use drizzle executor
+(`testDb`) plus `truncateAllTables()` / `closeTestDb()`, and derives the test
+database from `DATABASE_URL` so it follows the local configuration. Test data
+factories (`createTestUser`, `createTestOrganization`, `createTestWorkspace`,
+`addOrganizationMember`) live in `src/db/__tests__/helpers/factories.ts`.
+
+## 6. DB tests are isolated by unique data, not by truncation
+
+`bun test` runs all files in one process with shared module state. Two
+consequences:
+
+- Never close the shared harness client in a test file (`afterAll(closeTestDb)`
+  in one file breaks every file after it). Connections are process-scoped and
+  die with the test run.
+- Never truncate in `beforeEach`/`beforeAll` of a test file — it wipes rows
+  other files are still using. Isolation comes from factories generating
+  unique data (nanoid emails, usernames, slugs), with every test asserting
+  only the rows it created. The suite-wide truncate happens once, in
+  `test:setup`.
+
+## 7. Test services directly, with real rows
+
+Services are constructed against `testDb` (`new SomeService(testDb)`), seeded
+with the factories, and asserted against the rows they return or the tables
+they write — including the `activity_logs` rows mutations must produce. Prefer
+asserting the persisted state over re-deriving it from return values. Do not
+duplicate coverage: when an orchestration service already exercises a
+dependency's path (e.g. `AccountsService` covers `createOrganization`), test
+the remaining paths of that dependency instead of repeating the same test.
