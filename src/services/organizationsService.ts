@@ -8,7 +8,10 @@ import {
   organizations,
   selectOrganizationSchema,
 } from "../db/schemas/organizations";
+import { organizationActivity } from "../utils/activityDefinitions";
 import { InternalError } from "../utils/InternalError";
+import { ActivityLogger } from "./activityLoggerService";
+import { UsersService } from "./usersService";
 
 const ORGANIZATION_SLUG_MAX_LENGTH = 150;
 const ORGANIZATION_SLUG_SUFFIX_LENGTH = 8;
@@ -83,6 +86,27 @@ const createOrganizationResponseSchema = z.object({
 
 type CreateOrganizationResponse = z.infer<
   typeof createOrganizationResponseSchema
+>;
+
+const updateOrganizationSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  logo: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+});
+
+type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>;
+
+type UpdateOrganizationProps = UpdateOrganizationInput & {
+  id: string;
+  userId: string;
+};
+
+const updateOrganizationResponseSchema = z.object({
+  organization: selectOrganizationSchema.nullable(),
+});
+
+type UpdateOrganizationResponse = z.infer<
+  typeof updateOrganizationResponseSchema
 >;
 
 /**
@@ -195,6 +219,134 @@ class OrganizationsService {
 
     return { organization: organization ?? null };
   }
+
+  /**
+   * Updates an organization's name, logo, and/or description by id. A changed
+   * name regenerates the organization slug.
+   *
+   * Permissions are enforced by the route layer; this method only scopes access
+   * to the caller's organization membership. Returns the updated row, the
+   * current row when no update fields are given, or null when the organization
+   * does not exist or the caller is not a member of it.
+   *
+   * Each mutation runs with an `organization.updated` activity row on the same
+   * transaction, diffed against the pre-update row.
+   */
+  async updateOrganization(
+    props: UpdateOrganizationProps,
+  ): Promise<UpdateOrganizationResponse> {
+    const [existing] = await this.db
+      .select({ organization: organizations })
+      .from(organizations)
+      .innerJoin(
+        organizationMembers,
+        and(
+          eq(organizationMembers.organizationId, organizations.id),
+          eq(organizationMembers.userId, props.userId),
+        ),
+      )
+      .where(eq(organizations.id, props.id))
+      .limit(1);
+
+    if (!existing) {
+      return { organization: null };
+    }
+
+    const existingOrganization = existing.organization;
+    const name = props.name;
+    const nameChanged =
+      name !== undefined && name !== existingOrganization.name;
+
+    if (
+      !nameChanged &&
+      props.logo === undefined &&
+      props.description === undefined
+    ) {
+      return { organization: existingOrganization };
+    }
+
+    // Snapshot label for the audit row; survives later user renames/deletes.
+    const { user: actor } = await new UsersService(this.db).getUserById({
+      id: props.userId,
+    });
+    const actorLabel = actor?.name ?? "unknown user";
+
+    if (!nameChanged) {
+      return await this.db.transaction(async (tx) => {
+        const [organization] = await tx
+          .update(organizations)
+          .set({ logo: props.logo, description: props.description })
+          .where(eq(organizations.id, props.id))
+          .returning();
+
+        if (!organization) {
+          throw new InternalError("organization update returned no row");
+        }
+
+        // Written on the same transaction, so the audit row commits or
+        // rolls back together with the organization.
+        await new ActivityLogger(tx).recordChange(organizationActivity, {
+          organizationId: organization.id,
+          actor: { userId: props.userId, label: actorLabel },
+          action: "updated",
+          entityId: organization.id,
+          before: existingOrganization,
+          after: organization,
+        });
+
+        return { organization };
+      });
+    }
+
+    const slugBase = toOrganizationSlugBase(name);
+
+    for (let attempt = 0; attempt < ORGANIZATION_SLUG_ATTEMPTS; attempt++) {
+      const slug = `${slugBase}-${nanoid(ORGANIZATION_SLUG_SUFFIX_LENGTH)}`;
+
+      try {
+        return await this.db.transaction(async (tx) => {
+          const [organization] = await tx
+            .update(organizations)
+            .set({
+              name,
+              slug,
+              logo: props.logo,
+              description: props.description,
+            })
+            .where(eq(organizations.id, props.id))
+            .returning();
+
+          if (!organization) {
+            throw new InternalError("organization update returned no row");
+          }
+
+          // Written on the same transaction, so a slug-conflict retry rolls
+          // the audit row back together with the failed update.
+          await new ActivityLogger(tx).recordChange(organizationActivity, {
+            organizationId: organization.id,
+            actor: { userId: props.userId, label: actorLabel },
+            action: "updated",
+            entityId: organization.id,
+            before: existingOrganization,
+            after: organization,
+          });
+
+          return { organization };
+        });
+      } catch (error) {
+        if (
+          attempt < ORGANIZATION_SLUG_ATTEMPTS - 1 &&
+          isUniqueViolation(error)
+        ) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    throw new InternalError("could not generate a unique organization slug");
+  }
 }
 
 export type {
@@ -205,11 +357,16 @@ export type {
   GetOrganizationByIdResponse,
   CreateOrganizationProps,
   CreateOrganizationResponse,
+  UpdateOrganizationInput,
+  UpdateOrganizationProps,
+  UpdateOrganizationResponse,
 };
 export {
   getOrganizationsFiltersSchema,
   getOrganizationsResponseSchema,
   getOrganizationByIdResponseSchema,
   createOrganizationResponseSchema,
+  updateOrganizationSchema,
+  updateOrganizationResponseSchema,
   OrganizationsService,
 };
