@@ -8,6 +8,10 @@ import {
   createAccountWorkspaceSchema,
 } from "../../../services/accountsService";
 import { type AuthContext, getContextUser } from "../../../utils/AuthContext";
+import {
+  getOrganizationsResponseSchema,
+  OrganizationsService,
+} from "../../../services/organizationsService";
 import { errorResponseSchema } from "../../utils/apiErrorResponse";
 
 const organizationsRoutes = new OpenAPIHono<{
@@ -55,6 +59,43 @@ const createAccountRoute = createRoute({
       },
     },
   },
+});
+
+const getOrganizationsRoute = createRoute({
+  method: "get",
+  path: "/",
+  tags: ["organizations"],
+  summary: "List the signed in user's organizations",
+  description:
+    "Returns the organizations the session user is a member of, newest first. The user id is taken from the session, never from the request.",
+  responses: {
+    200: {
+      description: "Organizations the user belongs to",
+      content: {
+        "application/json": {
+          schema: getOrganizationsResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+organizationsRoutes.openapi(getOrganizationsRoute, async (c) => {
+  const user = getContextUser(c);
+
+  const { organizations } = await new OrganizationsService(db).getOrganizations(
+    { filters: { userId: user.id } },
+  );
+
+  return c.json({ organizations }, StatusCodes.OK);
 });
 
 organizationsRoutes.openapi(createAccountRoute, async (c) => {
