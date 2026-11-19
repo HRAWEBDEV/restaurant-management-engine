@@ -63,6 +63,7 @@ type GetOrganizationsResponse = z.infer<typeof getOrganizationsResponseSchema>;
 
 type GetOrganizationByIdProps = {
   id: string;
+  userId: string;
 };
 
 const getOrganizationByIdResponseSchema = z.object({
@@ -151,6 +152,29 @@ class OrganizationsService {
   }
 
   /**
+   * Returns a single organization by id when the caller is a member of it, or
+   * null when the organization does not exist or the caller is not a member.
+   */
+  async getOrganizationById(
+    props: GetOrganizationByIdProps,
+  ): Promise<GetOrganizationByIdResponse> {
+    const [existing] = await this.db
+      .select({ organization: organizations })
+      .from(organizations)
+      .innerJoin(
+        organizationMembers,
+        and(
+          eq(organizationMembers.organizationId, organizations.id),
+          eq(organizationMembers.userId, props.userId),
+        ),
+      )
+      .where(eq(organizations.id, props.id))
+      .limit(1);
+
+    return { organization: existing?.organization ?? null };
+  }
+
+  /**
    * Creates an organization and its first membership in a single transaction,
    * making `userId` the organization owner.
    *
@@ -203,21 +227,6 @@ class OrganizationsService {
     }
 
     throw new InternalError("could not generate a unique organization slug");
-  }
-
-  /**
-   * Returns a single organization by id, or null when it does not exist.
-   */
-  async getOrganizationById(
-    props: GetOrganizationByIdProps,
-  ): Promise<GetOrganizationByIdResponse> {
-    const [organization] = await this.db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.id, props.id))
-      .limit(1);
-
-    return { organization: organization ?? null };
   }
 
   /**
