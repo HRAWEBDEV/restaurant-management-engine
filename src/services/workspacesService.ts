@@ -13,7 +13,10 @@ import {
 } from "../db/schemas/organizations";
 import { workspaceMembers } from "../db/schemas/workspaceMembers";
 import { selectWorkspaceSchema, workspaces } from "../db/schemas/workspaces";
+import { workspaceActivity } from "../utils/activityDefinitions";
 import { InternalError } from "../utils/InternalError";
+import { ActivityLogger } from "./activityLoggerService";
+import { UsersService } from "./usersService";
 
 const WORKSPACE_SLUG_MAX_LENGTH = 150;
 const WORKSPACE_SLUG_SUFFIX_LENGTH = 8;
@@ -192,7 +195,8 @@ class WorkspacesService {
    *
    * Slugs are server-generated (`slugify` + random suffix) and retried when a
    * concurrent create claims the same value. The creator is also added as a
-   * workspace member with the `admin` role so they appear in member lists.
+   * workspace member with the `admin` role so they appear in member lists. A
+   * `workspace.created` activity row is written on the same transaction.
    *
    * Returns null when the caller is not a member of the organization.
    */
@@ -213,6 +217,12 @@ class WorkspacesService {
     if (!membership) {
       return { workspace: null };
     }
+
+    // Snapshot label for the audit row; survives later user renames/deletes.
+    const { user: actor } = await new UsersService(this.db).getUserById({
+      id: props.userId,
+    });
+    const actorLabel = actor?.name ?? "unknown user";
 
     const slugBase = toWorkspaceSlugBase(props.name);
 
@@ -244,6 +254,17 @@ class WorkspacesService {
             addedBy: props.userId,
           });
 
+          // Written on the same transaction, so the audit row commits or
+          // rolls back together with the workspace.
+          await new ActivityLogger(tx).recordChange(workspaceActivity, {
+            organizationId: props.organizationId,
+            workspaceId: workspace.id,
+            actor: { userId: props.userId, label: actorLabel },
+            action: "created",
+            entityId: workspace.id,
+            after: workspace,
+          });
+
           return { workspace };
         });
       } catch (error) {
@@ -266,6 +287,9 @@ class WorkspacesService {
    * to the caller's organization membership. Returns the updated row, the
    * current row when no update fields are given, or null when the workspace
    * does not exist or the caller cannot access it.
+   *
+   * Each mutation runs with a `workspace.updated` activity row on the same
+   * transaction, diffed against the pre-update row.
    */
   async updateWorkspace(
     props: UpdateWorkspaceProps,
@@ -280,19 +304,45 @@ class WorkspacesService {
     }
 
     const name = props.name;
+    const nameChanged =
+      name !== undefined && name !== existingWorkspace.workspace.name;
 
-    if (name === undefined || name === existingWorkspace.workspace.name) {
-      if (props.description === undefined) {
-        return { workspace: existingWorkspace.workspace };
-      }
+    if (!nameChanged && props.description === undefined) {
+      return { workspace: existingWorkspace.workspace };
+    }
 
-      const [workspace] = await this.db
-        .update(workspaces)
-        .set({ description: props.description })
-        .where(eq(workspaces.id, props.id))
-        .returning();
+    // Snapshot label for the audit row; survives later user renames/deletes.
+    const { user: actor } = await new UsersService(this.db).getUserById({
+      id: props.userId,
+    });
+    const actorLabel = actor?.name ?? "unknown user";
 
-      return { workspace: workspace ?? null };
+    if (!nameChanged) {
+      return await this.db.transaction(async (tx) => {
+        const [workspace] = await tx
+          .update(workspaces)
+          .set({ description: props.description })
+          .where(eq(workspaces.id, props.id))
+          .returning();
+
+        if (!workspace) {
+          throw new InternalError("workspace update returned no row");
+        }
+
+        // Written on the same transaction, so the audit row commits or
+        // rolls back together with the workspace.
+        await new ActivityLogger(tx).recordChange(workspaceActivity, {
+          organizationId: existingWorkspace.workspace.organizationId,
+          workspaceId: workspace.id,
+          actor: { userId: props.userId, label: actorLabel },
+          action: "updated",
+          entityId: workspace.id,
+          before: existingWorkspace.workspace,
+          after: workspace,
+        });
+
+        return { workspace };
+      });
     }
 
     const slugBase = toWorkspaceSlugBase(name);
@@ -301,17 +351,35 @@ class WorkspacesService {
       const slug = `${slugBase}-${nanoid(WORKSPACE_SLUG_SUFFIX_LENGTH)}`;
 
       try {
-        const [workspace] = await this.db
-          .update(workspaces)
-          .set({
-            name,
-            slug,
-            description: props.description,
-          })
-          .where(eq(workspaces.id, props.id))
-          .returning();
+        return await this.db.transaction(async (tx) => {
+          const [workspace] = await tx
+            .update(workspaces)
+            .set({
+              name,
+              slug,
+              description: props.description,
+            })
+            .where(eq(workspaces.id, props.id))
+            .returning();
 
-        return { workspace: workspace ?? null };
+          if (!workspace) {
+            throw new InternalError("workspace update returned no row");
+          }
+
+          // Written on the same transaction, so a slug-conflict retry rolls
+          // the audit row back together with the failed update.
+          await new ActivityLogger(tx).recordChange(workspaceActivity, {
+            organizationId: existingWorkspace.workspace.organizationId,
+            workspaceId: workspace.id,
+            actor: { userId: props.userId, label: actorLabel },
+            action: "updated",
+            entityId: workspace.id,
+            before: existingWorkspace.workspace,
+            after: workspace,
+          });
+
+          return { workspace };
+        });
       } catch (error) {
         if (attempt < WORKSPACE_SLUG_ATTEMPTS - 1 && isUniqueViolation(error)) {
           continue;

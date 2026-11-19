@@ -1,4 +1,5 @@
 import type { DBExecutor } from "../db/connect";
+import { InternalError } from "../utils/InternalError";
 import {
   activityLogs,
   type ActivityChanges,
@@ -59,7 +60,7 @@ class ActivityLogger {
       .returning();
 
     if (!log) {
-      throw new Error("failed to write activity log");
+      throw new InternalError("failed to write activity log");
     }
 
     return log;
