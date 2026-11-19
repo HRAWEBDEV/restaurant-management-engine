@@ -59,7 +59,9 @@ const { createInsertSchema, createSelectSchema, createUpdateSchema } =
   createSchemaFactory({
     zodInstance: z,
   });
-const selectWorkspaceMemberSchema = createSelectSchema(workspaceMembers);
+const selectWorkspaceMemberSchema = createSelectSchema(workspaceMembers, {
+  role: z.enum(workspaceRoles),
+});
 const insertWorkspaceMemberSchema = createInsertSchema(workspaceMembers, {
   role: z.enum(workspaceRoles),
 }).omit({

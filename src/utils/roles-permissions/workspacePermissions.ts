@@ -3,8 +3,9 @@
  *
  * Permissions are namespaced strings (`resource:action` or `resource:sub:action`)
  * so they can be checked individually at the route/service layer.
- * `workspacePermissions` is the source of truth: roles are its keys.
- * Roles are deliberately limited for now: only `admin` is defined.
+ * `workspacePermissions` is the source of truth: roles are its keys, kept
+ * in sync with the `workspace_roles` pg enum. `member` exists as a key but
+ * currently grants nothing; only `admin` has grants.
  */
 const workspacePermissions = {
   admin: [
@@ -38,6 +39,7 @@ const workspacePermissions = {
     "payment:refund",
     "report:read",
   ],
+  member: [],
 } as const;
 
 type WorkspaceRole = keyof typeof workspacePermissions;

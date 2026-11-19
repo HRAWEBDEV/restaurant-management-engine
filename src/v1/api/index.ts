@@ -6,6 +6,7 @@ import { InternalError } from "../../utils/InternalError";
 import { NotFoundError } from "../../utils/NotFoundError";
 import { authRoutes } from "./routes/auth";
 import { organizationsRoutes } from "./routes/organizations";
+import { workspacesRoutes } from "./routes/workspaces";
 
 const checkHealth = createRoute({
   method: "get",
@@ -47,6 +48,7 @@ apiV1Routes.route("/", authRoutes);
 apiV1Routes.use(authMiddleware);
 
 apiV1Routes.route("/", organizationsRoutes);
+apiV1Routes.route("/", workspacesRoutes);
 
 // global error handling, keep this after all routes
 apiV1Routes.notFound((c) => new NotFoundError().handle(c));

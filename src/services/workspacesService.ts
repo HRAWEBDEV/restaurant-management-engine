@@ -11,7 +11,10 @@ import {
   organizations,
   selectOrganizationSchema,
 } from "../db/schemas/organizations";
-import { workspaceMembers } from "../db/schemas/workspaceMembers";
+import {
+  selectWorkspaceMemberSchema,
+  workspaceMembers,
+} from "../db/schemas/workspaceMembers";
 import { selectWorkspaceSchema, workspaces } from "../db/schemas/workspaces";
 import { workspaceActivity } from "../utils/activityDefinitions";
 import { InternalError } from "../utils/InternalError";
@@ -75,10 +78,28 @@ type GetWorkspaceByIdProps = {
 };
 
 const getWorkspaceByIdResponseSchema = z.object({
-  workspace: workspaceWithRelationsSchema.nullable(),
+  workspace: selectWorkspaceSchema.nullable(),
 });
 
 type GetWorkspaceByIdResponse = z.infer<typeof getWorkspaceByIdResponseSchema>;
+
+/**
+ * Service-level response for `getWorkspaceById`: the workspace joined with its
+ * organization, the caller's organization membership row, and the caller's
+ * workspace membership row when they are a member of the workspace itself.
+ * The organization and membership rows are internal to authorization and are
+ * not part of the HTTP contract, which stays `getWorkspaceByIdResponseSchema`.
+ */
+const getWorkspaceWithMembershipResponseSchema = z.object({
+  workspace: selectWorkspaceSchema.nullable(),
+  organization: selectOrganizationSchema.nullable(),
+  membership: selectOrganizationMemberSchema.nullable(),
+  workspaceMembership: selectWorkspaceMemberSchema.nullable(),
+});
+
+type GetWorkspaceWithMembershipResponse = z.infer<
+  typeof getWorkspaceWithMembershipResponseSchema
+>;
 
 const createWorkspaceSchema = z.object({
   organizationId: z.uuid(),
@@ -159,19 +180,22 @@ class WorkspacesService {
   }
 
   /**
-   * Returns a single workspace by id in the same shape as `getWorkspaces`,
-   * joined with its organization and the user's organization membership row.
-   * Returns null when the workspace does not exist or the user is not a member
-   * of its organization.
+   * Returns a single workspace by id together with the caller's organization
+   * membership row, and the caller's workspace membership row when they are a
+   * member of the workspace itself. The membership rows carry the roles the
+   * route layer needs for `checkLevelPermissions`; all fields are null when
+   * the workspace does not exist or the caller is not a member of its
+   * organization.
    */
   async getWorkspaceById(
     props: GetWorkspaceByIdProps,
-  ): Promise<GetWorkspaceByIdResponse> {
-    const [workspace] = await this.db
+  ): Promise<GetWorkspaceWithMembershipResponse> {
+    const [existing] = await this.db
       .select({
         workspace: workspaces,
         organization: organizations,
-        member: organizationMembers,
+        membership: organizationMembers,
+        workspaceMembership: workspaceMembers,
       })
       .from(workspaces)
       .innerJoin(organizations, eq(workspaces.organizationId, organizations.id))
@@ -182,10 +206,22 @@ class WorkspacesService {
           eq(organizationMembers.userId, props.userId),
         ),
       )
+      .leftJoin(
+        workspaceMembers,
+        and(
+          eq(workspaceMembers.workspaceId, workspaces.id),
+          eq(workspaceMembers.organizationMemberId, organizationMembers.id),
+        ),
+      )
       .where(eq(workspaces.id, props.id))
       .limit(1);
 
-    return { workspace: workspace ?? null };
+    return {
+      workspace: existing?.workspace ?? null,
+      organization: existing?.organization ?? null,
+      membership: existing?.membership ?? null,
+      workspaceMembership: existing?.workspaceMembership ?? null,
+    };
   }
 
   /**
@@ -305,10 +341,10 @@ class WorkspacesService {
 
     const name = props.name;
     const nameChanged =
-      name !== undefined && name !== existingWorkspace.workspace.name;
+      name !== undefined && name !== existingWorkspace.name;
 
     if (!nameChanged && props.description === undefined) {
-      return { workspace: existingWorkspace.workspace };
+      return { workspace: existingWorkspace };
     }
 
     // Snapshot label for the audit row; survives later user renames/deletes.
@@ -332,12 +368,12 @@ class WorkspacesService {
         // Written on the same transaction, so the audit row commits or
         // rolls back together with the workspace.
         await new ActivityLogger(tx).recordChange(workspaceActivity, {
-          organizationId: existingWorkspace.workspace.organizationId,
+          organizationId: existingWorkspace.organizationId,
           workspaceId: workspace.id,
           actor: { userId: props.userId, label: actorLabel },
           action: "updated",
           entityId: workspace.id,
-          before: existingWorkspace.workspace,
+          before: existingWorkspace,
           after: workspace,
         });
 
@@ -369,12 +405,12 @@ class WorkspacesService {
           // Written on the same transaction, so a slug-conflict retry rolls
           // the audit row back together with the failed update.
           await new ActivityLogger(tx).recordChange(workspaceActivity, {
-            organizationId: existingWorkspace.workspace.organizationId,
+            organizationId: existingWorkspace.organizationId,
             workspaceId: workspace.id,
             actor: { userId: props.userId, label: actorLabel },
             action: "updated",
             entityId: workspace.id,
-            before: existingWorkspace.workspace,
+            before: existingWorkspace,
             after: workspace,
           });
 
@@ -399,6 +435,7 @@ export type {
   GetWorkspacesResponse,
   GetWorkspaceByIdProps,
   GetWorkspaceByIdResponse,
+  GetWorkspaceWithMembershipResponse,
   CreateWorkspaceInput,
   CreateWorkspaceProps,
   CreateWorkspaceResponse,
@@ -411,6 +448,7 @@ export {
   workspaceWithRelationsSchema,
   getWorkspacesResponseSchema,
   getWorkspaceByIdResponseSchema,
+  getWorkspaceWithMembershipResponseSchema,
   createWorkspaceSchema,
   createWorkspaceResponseSchema,
   updateWorkspaceSchema,
