@@ -157,9 +157,14 @@ class AssetStorage {
   private normalizeSubPath(subPath: string): string | null {
     const normalized = path.posix
       .normalize(subPath.replaceAll("\\", "/").trim())
-      .replaceAll(/^\.?\/?|\/+$/g, "");
+      // strip leading "./" segments only; a bare leading "." would let ".." normalize to "."
+      .replaceAll(/^(\.\/)+|\/+$/g, "");
 
-    if (normalized.length === 0 || normalized.split("/").includes("..")) {
+    if (
+      normalized.length === 0 ||
+      normalized === "." ||
+      normalized.split("/").includes("..")
+    ) {
       return null;
     }
 
