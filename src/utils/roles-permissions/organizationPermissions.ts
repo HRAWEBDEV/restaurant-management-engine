@@ -3,8 +3,9 @@
  *
  * Permissions are namespaced strings (`resource:action` or `resource:sub:action`)
  * so they can be checked individually at the route/service layer.
- * `organizationPermissions` is the source of truth: roles are its keys.
- * Roles are deliberately limited for now: only `owner` is defined.
+ * `organizationPermissions` is the source of truth: roles are its keys, kept
+ * in sync with the `organization_roles` pg enum. `admin` and `member` exist as
+ * keys but currently grant nothing; only `owner` has grants.
  */
 const organizationPermissions = {
   owner: [
@@ -25,6 +26,8 @@ const organizationPermissions = {
     "billing:read",
     "billing:manage",
   ],
+  admin: [],
+  member: [],
 } as const;
 
 type OrganizationRole = keyof typeof organizationPermissions;

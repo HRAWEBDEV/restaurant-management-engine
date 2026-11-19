@@ -8,7 +8,10 @@ import {
   createAccountWorkspaceSchema,
 } from "../../../services/accountsService";
 import { type AuthContext, getContextUser } from "../../../utils/AuthContext";
+import { AssetStorage } from "../../../utils/assetStorage";
+import { ForbiddenError } from "../../../utils/ForbiddenError";
 import { NotFoundError } from "../../../utils/NotFoundError";
+import { checkLevelPermissions } from "../../../utils/roles-permissions/checkLevelPermissions";
 import {
   getOrganizationByIdResponseSchema,
   getOrganizationsResponseSchema,
@@ -16,7 +19,7 @@ import {
   updateOrganizationResponseSchema,
   updateOrganizationSchema,
 } from "../../../services/organizationsService";
-import { errorResponseSchema } from "../../utils/apiErrorResponse";
+import { errorResponseSchema, createErrorResponse } from "../../utils/apiErrorResponse";
 
 const organizationsRoutes = new OpenAPIHono<{
   Variables: AuthContext;
@@ -25,6 +28,33 @@ const organizationsRoutes = new OpenAPIHono<{
 const createAccountBodySchema = z.object({
   organization: createAccountOrganizationSchema,
   workspace: createAccountWorkspaceSchema.optional(),
+});
+
+/** MIME types and size limit accepted for organization logos. */
+const ORGANIZATION_LOGO_FILE_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+] as const;
+const ORGANIZATION_LOGO_MAX_SIZE = 2 * 1024 * 1024;
+
+/**
+ * Stores organization logos under `static/organizations/logos`, publicly
+ * served from `/static/organizations/logos/...`.
+ */
+const organizationLogoStorage = new AssetStorage({
+  subPath: "organizations/logos",
+  fileTypes: [...ORGANIZATION_LOGO_FILE_TYPES],
+  maxSize: ORGANIZATION_LOGO_MAX_SIZE,
+});
+
+const updateOrganizationLogoBodySchema = z.object({
+  logo: z
+    .file()
+    .mime([...ORGANIZATION_LOGO_FILE_TYPES])
+    .max(ORGANIZATION_LOGO_MAX_SIZE)
+    // z.file() needs an explicit OpenAPI type for document generation
+    .openapi({ type: "string", format: "binary" }),
 });
 
 const getOrganizationsRoute = createRoute({
@@ -100,7 +130,7 @@ const updateOrganizationRoute = createRoute({
   tags: ["organizations"],
   summary: "Update an organization the signed in user is a member of",
   description:
-    "Updates the name, logo, and/or description. A changed name regenerates the organization slug. Requests outside the caller's memberships are reported as not found.",
+    "Updates the name, logo, and/or description. A changed name regenerates the organization slug. Requests outside the caller's memberships are reported as not found; members whose role does not grant organization:update are rejected as forbidden.",
   request: {
     params: z.object({
       id: z.uuid(),
@@ -125,6 +155,80 @@ const updateOrganizationRoute = createRoute({
     },
     400: {
       description: "Invalid input",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    403: {
+      description:
+        "The caller is a member but their organization role does not grant organization:update",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description: "Organization not found, or the caller is not a member of it",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+const updateOrganizationLogoRoute = createRoute({
+  method: "put",
+  path: "/{id}/logo",
+  tags: ["organizations"],
+  summary: "Update the logo of an organization the signed in user is a member of",
+  description:
+    "Accepts a multipart form with an image file (png, jpeg, or webp, up to 2 MB), stores it under static/organizations/logos, updates the organization's logo, and deletes the replaced logo file. Requests outside the caller's memberships are reported as not found; members whose role does not grant organization:update are rejected as forbidden.",
+  request: {
+    params: z.object({
+      id: z.uuid(),
+    }),
+    body: {
+      required: true,
+      content: {
+        "multipart/form-data": {
+          schema: updateOrganizationLogoBodySchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Organization logo updated",
+      content: {
+        "application/json": {
+          schema: updateOrganizationResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: "Invalid input, or the file is unsupported or too large",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    403: {
+      description:
+        "The caller is a member but their organization role does not grant organization:update",
       content: {
         "application/json": {
           schema: errorResponseSchema,
@@ -220,15 +324,104 @@ organizationsRoutes.openapi(updateOrganizationRoute, async (c) => {
   const { id } = c.req.valid("param");
   const body = c.req.valid("json");
 
-  const { organization } = await new OrganizationsService(db)
-    .updateOrganization({
+  const { organization, membership } = await new OrganizationsService(db)
+    .getOrganizationById({
+      id,
+      userId: user.id,
+    });
+
+  if (!organization || !membership) {
+    throw new NotFoundError("organization not found");
+  }
+
+  const allowed = checkLevelPermissions({
+    level: "organization",
+    permission: "organization:update",
+    organizationRole: membership.role,
+  });
+
+  if (!allowed) {
+    throw new ForbiddenError(
+      "you do not have permission to update this organization",
+    );
+  }
+
+  const { organization: updatedOrganization } =
+    await new OrganizationsService(db).updateOrganization({
       id,
       userId: user.id,
       ...body,
     });
 
-  if (!organization) {
+  if (!updatedOrganization) {
     throw new NotFoundError("organization not found");
+  }
+
+  return c.json({ organization: updatedOrganization }, StatusCodes.OK);
+});
+
+organizationsRoutes.openapi(updateOrganizationLogoRoute, async (c) => {
+  const user = getContextUser(c);
+  const { id } = c.req.valid("param");
+  const { logo } = c.req.valid("form");
+
+  const service = new OrganizationsService(db);
+
+  // Fetched up front so the caller gets the previous logo to clean up, the
+  // membership role is available for the permission check, and a
+  // missing/non-member organization fails before a file is written.
+  const { organization: existing, membership } = await service
+    .getOrganizationById({
+      id,
+      userId: user.id,
+    });
+
+  if (!existing || !membership) {
+    throw new NotFoundError("organization not found");
+  }
+
+  const allowed = checkLevelPermissions({
+    level: "organization",
+    permission: "organization:update",
+    organizationRole: membership.role,
+  });
+
+  if (!allowed) {
+    throw new ForbiddenError(
+      "you do not have permission to update this organization",
+    );
+  }
+
+  const saveResult = await organizationLogoStorage.save(logo);
+
+  if (!saveResult.ok) {
+    return c.json(
+      createErrorResponse({ message: saveResult.error }),
+      StatusCodes.BAD_REQUEST,
+    );
+  }
+
+  const { organization } = await service.updateOrganization({
+    id,
+    userId: user.id,
+    logo: saveResult.asset.path,
+  });
+
+  // Should not happen after the membership check above, but don't leave the
+  // saved file behind if it does.
+  if (!organization) {
+    await organizationLogoStorage.remove(saveResult.asset.path);
+    throw new NotFoundError("organization not found");
+  }
+
+  // The new logo is committed; a failed removal of the old file must not fail
+  // the request, it is only logged.
+  if (existing.logo) {
+    try {
+      await organizationLogoStorage.remove(existing.logo);
+    } catch (error) {
+      console.error("failed to remove previous organization logo", error);
+    }
   }
 
   return c.json({ organization }, StatusCodes.OK);

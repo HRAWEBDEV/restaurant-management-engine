@@ -105,8 +105,9 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 - Permissions: namespaced strings (`resource:action` / `resource:sub:action`) declared per role in
   `src/utils/roles-permissions/`. Two levels (organization, workspace) plus `organizationWorkspace`
   (either level grants). Check with `checkLevelPermissions(...)`, passing roles resolved from
-  membership rows — never client input. Only `owner` (org) and `admin` (workspace) roles are
-  defined so far, and no route enforces them yet.
+  membership rows — never client input. Only `owner` (org) and `admin` (workspace) roles carry
+  grants so far (`organizationPermissions` also keys `admin`/`member` with empty lists to match
+  the `organization_roles` enum); only the organization update routes enforce them so far.
 - Audit: every state change should write an append-only `activity_logs` row via `ActivityLogger`
   (constructed with the same transaction as the mutation), with a diff built from a
   `defineActivity(...)` allowlist. Reports and tickets remain derived projections of domain
@@ -119,9 +120,11 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 - `insertOrganizationInvitationSchema` is not narrowed (exposes `id`, `invitedBy`, `status`,
   `acceptedAt`, `createdAt`); the member insert schemas still expose `addedBy`. Narrow these at
   the route layer and always set `invitedBy`/`addedBy` from the session.
-- Permissions are declared but not enforced anywhere: `checkLevelPermissions` exists but no route
-  or service calls it, and `AuthContext`'s `userOrganizationMember` / `userWorkspaceMemberRole`
-  keys are declared but never populated by `authMiddleware`.
+- Permissions enforcement is just starting: `checkLevelPermissions` is called in the organizations
+  routes (`organization:update` on `PATCH /{id}` and `PUT /{id}/logo`, resolved from the caller's
+  `organization_members` row). No other route or service enforces permissions yet, and
+  `AuthContext`'s `userOrganizationMember` / `userWorkspaceMemberRole` keys are declared but never
+  populated by `authMiddleware`.
 - Organization/workspace/member services exist but no routes are mounted for them yet (only
   `/auth/*` is wired); `ActivityLogger` is defined but not called from any service.
 - Domain tables lack `relations()` and several indexes (see `docs/user_space.md` § Known gaps).

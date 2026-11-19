@@ -274,6 +274,18 @@ canAccessWorkspace(user, workspace) =
          )
 ```
 
+### Route-level permission enforcement
+
+Permissions are declared per role in `src/utils/roles-permissions/` and checked with
+`checkLevelPermissions({ level, permission, organizationRole, workspaceRole })`, whose roles must
+come from membership rows, never client input. Enforcement is route-by-route as domains are built:
+
+- `PATCH /organizations/{id}` and `PUT /organizations/{id}/logo` require the organization-level
+  `organization:update` permission (only `owner` grants it today). Non-members get `404` (no
+  existence leak); members without the grant get `403`. The membership role is resolved via
+  `OrganizationsService.getOrganizationById`, which returns the caller's `organization_members`
+  row alongside the organization.
+
 ## Canonical flows
 
 ### 1. Sign up / sign in

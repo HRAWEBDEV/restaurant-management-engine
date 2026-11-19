@@ -55,7 +55,11 @@ const { createSelectSchema, createInsertSchema, createUpdateSchema } =
   createSchemaFactory({
     zodInstance: z,
   });
-const selectOrganizationMemberSchema = createSelectSchema(organizationMembers);
+// createSelectSchema maps pgEnum columns to plain strings, so the role is
+// overridden to preserve the literal union, matching the insert/update schemas.
+const selectOrganizationMemberSchema = createSelectSchema(organizationMembers, {
+  role: z.enum(ogMemberRoles),
+});
 const insertOrganizationMemberSchema = createInsertSchema(organizationMembers, {
   role: z.enum(ogMemberRoles),
 }).omit({

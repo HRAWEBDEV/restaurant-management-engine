@@ -3,7 +3,10 @@ import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import slugify from "slugify";
 import type { DBExecutor } from "../db/connect";
-import { organizationMembers } from "../db/schemas/organizationMembers";
+import {
+  organizationMembers,
+  selectOrganizationMemberSchema,
+} from "../db/schemas/organizationMembers";
 import {
   organizations,
   selectOrganizationSchema,
@@ -72,6 +75,21 @@ const getOrganizationByIdResponseSchema = z.object({
 
 type GetOrganizationByIdResponse = z.infer<
   typeof getOrganizationByIdResponseSchema
+>;
+
+/**
+ * Service-level response for `getOrganizationById`: the organization plus the
+ * caller's membership row (which carries the role used for permission checks).
+ * The membership is internal to authorization and is not part of the HTTP
+ * contract, which stays `getOrganizationByIdResponseSchema`.
+ */
+const getOrganizationWithMembershipResponseSchema = z.object({
+  organization: selectOrganizationSchema.nullable(),
+  membership: selectOrganizationMemberSchema.nullable(),
+});
+
+type GetOrganizationWithMembershipResponse = z.infer<
+  typeof getOrganizationWithMembershipResponseSchema
 >;
 
 type CreateOrganizationProps = {
@@ -152,14 +170,19 @@ class OrganizationsService {
   }
 
   /**
-   * Returns a single organization by id when the caller is a member of it, or
-   * null when the organization does not exist or the caller is not a member.
+   * Returns a single organization by id together with the caller's membership
+   * row when the caller is a member of it. The membership row carries the role
+   * the route layer needs for `checkLevelPermissions`; both fields are null
+   * when the organization does not exist or the caller is not a member.
    */
   async getOrganizationById(
     props: GetOrganizationByIdProps,
-  ): Promise<GetOrganizationByIdResponse> {
+  ): Promise<GetOrganizationWithMembershipResponse> {
     const [existing] = await this.db
-      .select({ organization: organizations })
+      .select({
+        organization: organizations,
+        membership: organizationMembers,
+      })
       .from(organizations)
       .innerJoin(
         organizationMembers,
@@ -171,7 +194,10 @@ class OrganizationsService {
       .where(eq(organizations.id, props.id))
       .limit(1);
 
-    return { organization: existing?.organization ?? null };
+    return {
+      organization: existing?.organization ?? null,
+      membership: existing?.membership ?? null,
+    };
   }
 
   /**
@@ -244,24 +270,16 @@ class OrganizationsService {
   async updateOrganization(
     props: UpdateOrganizationProps,
   ): Promise<UpdateOrganizationResponse> {
-    const [existing] = await this.db
-      .select({ organization: organizations })
-      .from(organizations)
-      .innerJoin(
-        organizationMembers,
-        and(
-          eq(organizationMembers.organizationId, organizations.id),
-          eq(organizationMembers.userId, props.userId),
-        ),
-      )
-      .where(eq(organizations.id, props.id))
-      .limit(1);
+    const { organization: existingOrganization } =
+      await this.getOrganizationById({
+        id: props.id,
+        userId: props.userId,
+      });
 
-    if (!existing) {
+    if (!existingOrganization) {
       return { organization: null };
     }
 
-    const existingOrganization = existing.organization;
     const name = props.name;
     const nameChanged =
       name !== undefined && name !== existingOrganization.name;
@@ -364,6 +382,7 @@ export type {
   GetOrganizationsResponse,
   GetOrganizationByIdProps,
   GetOrganizationByIdResponse,
+  GetOrganizationWithMembershipResponse,
   CreateOrganizationProps,
   CreateOrganizationResponse,
   UpdateOrganizationInput,
@@ -374,6 +393,7 @@ export {
   getOrganizationsFiltersSchema,
   getOrganizationsResponseSchema,
   getOrganizationByIdResponseSchema,
+  getOrganizationWithMembershipResponseSchema,
   createOrganizationResponseSchema,
   updateOrganizationSchema,
   updateOrganizationResponseSchema,
