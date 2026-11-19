@@ -87,8 +87,9 @@ type GetWorkspaceByIdResponse = z.infer<typeof getWorkspaceByIdResponseSchema>;
  * Service-level response for `getWorkspaceById`: the workspace joined with its
  * organization, the caller's organization membership row, and the caller's
  * workspace membership row when they are a member of the workspace itself.
- * The organization and membership rows are internal to authorization and are
- * not part of the HTTP contract, which stays `getWorkspaceByIdResponseSchema`.
+ * The membership rows carry the roles the route layer needs for
+ * `checkLevelPermissions`; all fields are null when the workspace does not
+ * exist or the caller is not a member of its organization.
  */
 const getWorkspaceWithMembershipResponseSchema = z.object({
   workspace: selectWorkspaceSchema.nullable(),

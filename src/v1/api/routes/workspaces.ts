@@ -2,8 +2,8 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { StatusCodes } from "http-status-codes";
 import { db } from "../../../db/connect";
 import {
-  getWorkspaceByIdResponseSchema,
   getWorkspacesResponseSchema,
+  getWorkspaceWithMembershipResponseSchema,
   updateWorkspaceResponseSchema,
   updateWorkspaceSchema,
   WorkspacesService,
@@ -51,7 +51,7 @@ const getWorkspaceByIdRoute = createRoute({
   tags: ["workspaces"],
   summary: "Get a workspace the signed in user can reach",
   description:
-    "Returns a single workspace when it exists and the session user is a member of its organization. Requests outside the caller's memberships are reported as not found.",
+    "Returns the workspace, its organization, the caller's organization membership row, and the caller's workspace membership row (null when they are not a workspace member). Requests outside the caller's organization memberships are reported as not found.",
   request: {
     params: z.object({
       id: z.uuid(),
@@ -59,10 +59,11 @@ const getWorkspaceByIdRoute = createRoute({
   },
   responses: {
     200: {
-      description: "Workspace details",
+      description:
+        "Workspace with its organization and the caller's membership rows",
       content: {
         "application/json": {
-          schema: getWorkspaceByIdResponseSchema,
+          schema: getWorkspaceWithMembershipResponseSchema,
         },
       },
     },
@@ -166,16 +167,16 @@ workspacesRoutes.openapi(getWorkspaceByIdRoute, async (c) => {
   const user = getContextUser(c);
   const { id } = c.req.valid("param");
 
-  const { workspace } = await new WorkspacesService(db).getWorkspaceById({
+  const result = await new WorkspacesService(db).getWorkspaceById({
     id,
     userId: user.id,
   });
 
-  if (!workspace) {
+  if (!result.workspace) {
     throw new NotFoundError("workspace not found");
   }
 
-  return c.json({ workspace }, StatusCodes.OK);
+  return c.json(result, StatusCodes.OK);
 });
 
 workspacesRoutes.openapi(updateWorkspaceRoute, async (c) => {

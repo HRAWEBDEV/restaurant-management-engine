@@ -80,8 +80,6 @@ type GetOrganizationByIdResponse = z.infer<
 /**
  * Service-level response for `getOrganizationById`: the organization plus the
  * caller's membership row (which carries the role used for permission checks).
- * The membership is internal to authorization and is not part of the HTTP
- * contract, which stays `getOrganizationByIdResponseSchema`.
  */
 const getOrganizationWithMembershipResponseSchema = z.object({
   organization: selectOrganizationSchema.nullable(),

@@ -13,8 +13,8 @@ import { ForbiddenError } from "../../../utils/ForbiddenError";
 import { NotFoundError } from "../../../utils/NotFoundError";
 import { checkLevelPermissions } from "../../../utils/roles-permissions/checkLevelPermissions";
 import {
-  getOrganizationByIdResponseSchema,
   getOrganizationsResponseSchema,
+  getOrganizationWithMembershipResponseSchema,
   OrganizationsService,
   updateOrganizationResponseSchema,
   updateOrganizationSchema,
@@ -90,7 +90,7 @@ const getOrganizationByIdRoute = createRoute({
   tags: ["organizations"],
   summary: "Get an organization the signed in user is a member of",
   description:
-    "Returns a single organization when it exists and the session user is a member of it. Requests outside the caller's memberships are reported as not found.",
+    "Returns the organization and the caller's membership row when it exists and the session user is a member of it. Requests outside the caller's memberships are reported as not found.",
   request: {
     params: z.object({
       id: z.uuid(),
@@ -98,10 +98,10 @@ const getOrganizationByIdRoute = createRoute({
   },
   responses: {
     200: {
-      description: "Organization details",
+      description: "Organization with the caller's membership row",
       content: {
         "application/json": {
-          schema: getOrganizationByIdResponseSchema,
+          schema: getOrganizationWithMembershipResponseSchema,
         },
       },
     },
@@ -306,17 +306,16 @@ organizationsRoutes.openapi(getOrganizationByIdRoute, async (c) => {
   const user = getContextUser(c);
   const { id } = c.req.valid("param");
 
-  const { organization } = await new OrganizationsService(db)
-    .getOrganizationById({
-      id,
-      userId: user.id,
-    });
+  const result = await new OrganizationsService(db).getOrganizationById({
+    id,
+    userId: user.id,
+  });
 
-  if (!organization) {
+  if (!result.organization) {
     throw new NotFoundError("organization not found");
   }
 
-  return c.json({ organization }, StatusCodes.OK);
+  return c.json(result, StatusCodes.OK);
 });
 
 organizationsRoutes.openapi(updateOrganizationRoute, async (c) => {
