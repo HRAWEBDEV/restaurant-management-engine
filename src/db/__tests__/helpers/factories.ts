@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { and, eq } from "drizzle-orm";
 import { user } from "../../../../auth-schema";
 import { organizationMembers } from "../../schemas/organizationMembers";
+import { workspaceMembers } from "../../schemas/workspaceMembers";
 import { OrganizationsService } from "../../../services/organizationsService";
 import { WorkspacesService } from "../../../services/workspacesService";
 import type { TestDb } from "./db";
@@ -120,8 +121,41 @@ async function addOrganizationMember(
   return member;
 }
 
+/**
+ * Inserts a workspace membership directly, tied to an existing organization
+ * membership row (the composite FK requires it).
+ */
+async function addWorkspaceMember(
+  db: TestDb,
+  props: {
+    workspaceId: string;
+    organizationMemberId: string;
+    organizationId: string;
+    role?: "admin" | "member";
+    addedBy?: string | null;
+  },
+) {
+  const [member] = await db
+    .insert(workspaceMembers)
+    .values({
+      workspaceId: props.workspaceId,
+      organizationMemberId: props.organizationMemberId,
+      organizationId: props.organizationId,
+      role: props.role ?? "member",
+      addedBy: props.addedBy ?? null,
+    })
+    .returning();
+
+  if (!member) {
+    throw new Error("workspace member insert returned no row");
+  }
+
+  return member;
+}
+
 export {
   addOrganizationMember,
+  addWorkspaceMember,
   createTestOrganization,
   createTestUser,
   createTestWorkspace,
