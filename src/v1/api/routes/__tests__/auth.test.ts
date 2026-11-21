@@ -228,4 +228,44 @@ describe("POST /auth/account", () => {
 
     expect(response.status).toBe(400);
   });
+
+  it("defaults the workspace name to the organization name when omitted", async () => {
+    const credentials = signUpBody();
+
+    const response = await app.request("/auth/account", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        user: credentials,
+        organization: { name: `Acme ${nanoid(6)}` },
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const body = await jsonBody<{
+      organization: { name: string };
+      workspace: { name: string; organizationId: string };
+    }>(response);
+    expect(body.workspace.name).toBe(body.organization.name);
+  });
+
+  it("rejects an already-registered email with 422", async () => {
+    const { credentials } = await signUp();
+
+    const response = await app.request("/auth/account", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        user: {
+          ...credentials,
+          username: `user_${nanoid(12).replaceAll("-", "").toLowerCase()}`,
+        },
+        organization: { name: "Acme Restaurant" },
+      }),
+    });
+
+    expect(response.status).toBe(422);
+    const body = await jsonBody<{ message?: string }>(response);
+    expect(typeof body.message).toBe("string");
+  });
 });
