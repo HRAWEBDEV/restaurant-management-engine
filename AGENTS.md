@@ -2,15 +2,18 @@
 
 `restaurant-manager-api` is a Bun-native, multi-tenant HTTP API for restaurant operations
 (catalog, floor, orders, kitchen, inventory, staff, payments, reporting). It is early-stage:
-auth and organization routes, the full tenancy schema (organizations, workspaces, members,
-invitations, activity logs), services for those aggregates, and a permissions scaffold exist;
-workspace/member routes and most operational domain modules are not built yet.
+auth, organization, user, and workspace routes; the full tenancy schema (organizations,
+workspaces, members, invitations, activity logs); services for those aggregates; and a
+permissions scaffold exist. Member/invitation routes and most operational domain modules are
+not built yet.
 
 Design/scope lives in the docs — load them only when the task needs them:
 
-- `docs/user_space.md` — identity/tenancy model, tables, invariants, known gaps.
-- `docs/restaurant_management.md` — full feature list and domain rules.
-- `docs/tech_stack.md` — declared stack, package roles, scripts.
+- `docs/architecture.md` — layers, request lifecycle, source layout, dependencies, config.
+- `docs/data-model.md` — identity/tenancy model, tables, invariants, known gaps.
+- `docs/api.md` — API conventions and the wired endpoint catalog.
+- `docs/product-scope.md` — full feature list and domain rules.
+- `docs/testing.md` — how tests are written and run in this codebase.
 
 ## Commands
 
@@ -30,7 +33,7 @@ bun run auth:generate  # regenerate auth-schema.ts from the Better Auth config
 - After schema edits: `db:generate`, review the generated SQL, then `db:migrate`.
 - Tests: `bun:test` only, colocated in `__tests__/` next to the code under test. Run tests
   via `bun run test` (never bare `bun test <file>` — it skips the preload and hits the dev
-  database). Full rules: `docs/how_to_test.md`.
+  database). Full rules: `docs/testing.md`.
 - Never hand-edit generated artifacts: `drizzle/**`, `auth-schema.ts`.
 
 ## Layout
@@ -41,17 +44,23 @@ src/auth.ts                   betterAuth (Drizzle adapter, email/password, usern
 src/db/connect.ts             Bun.SQL client + drizzle; exports db, DBExecutor, testConnection, closeConnection
 src/db/schemas/*.ts           one file per table: table + Zod schemas + types
 src/db/utils/trackChanges.ts  created_at / updated_at columns
-src/middlewares/              authMiddleware (session -> context, 401 NOT_SIGNED_IN)
+src/middlewares/              authMiddleware (session -> context, 401 NOT_SIGNED_IN),
+                              organizationMemberMiddleware (x-organization-id -> membership row),
+                              workspaceRoleMiddleware (x-workspace-id -> workspace role; owners
+                              get implicit admin) — wired, not consumed by routes yet
 src/services/                 DB-access classes (organizations, workspaces, organization members,
-                              accounts orchestrates organization + default workspace, users)
-src/utils/                    AuthContext helpers, error classes (InternalError, NotFoundError,
-                              ForbiddenError), AssetStorage (save/remove files under static/)
+                              users, ActivityLogger; AccountsService orchestrates organization +
+                              default workspace)
+src/utils/                    AuthContext helpers, tenant header helpers (organizationContext,
+                              workspaceContext), error classes (InternalError, NotFoundError,
+                              ForbiddenError, ConflictError), AssetStorage (save/remove files
+                              under static/)
 src/utils/roles-permissions/  per-role permission strings + checkLevelPermissions
 src/utils/activityLoggerHelpers.ts  defineActivity / buildChanges / renderSummary audit helpers
 src/utils/activityDefinitions.ts    per-entity audit definitions (organizationActivity, workspaceActivity)
 src/v1/api/index.ts           /api/v1 router: health, /doc, /doc/ui, auth routes, auth guard,
-                              organizations routes, 404/onError
-src/v1/api/routes/*.ts        route modules per domain (auth and organizations wired today)
+                              organizations/users/workspaces routes, tenant middlewares, 404/onError
+src/v1/api/routes/*.ts        route modules per domain (auth, organizations, users, workspaces wired)
 static/                       served at /static/* (serveStatic); uploaded assets, not committed
 src/v1/utils/apiErrorResponse.ts  errorResponseSchema + createErrorResponse
 auth-schema.ts                Better Auth tables + user Zod schemas (generated)
@@ -152,7 +161,9 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   the route layer and always set `invitedBy`/`addedBy` from the session.
 - Permissions enforcement is just starting: `checkLevelPermissions` is called in the organizations
   routes (`organization:update` on `PATCH /{id}` and `PUT /{id}/logo`, resolved from the caller's
-  `organization_members` row). No other route or service enforces permissions yet.
+  `organization_members` row) and in the workspaces route (`workspace:update` on `PATCH /{id}`,
+  checked at `organizationWorkspace` level from both membership rows). No other route or service
+  enforces permissions yet.
 - Tenant context: `organizationMemberMiddleware` (resolves `x-organization-id`, sets
   `userOrganizationMember`) and `workspaceRoleMiddleware` (resolves `x-workspace-id`, sets
   `userWorkspaceMemberRole`; owners get an implicit `admin`) are wired in `src/v1/api/index.ts`
@@ -160,10 +171,10 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   are guarded. No existing route consumes the context yet. The order of the two middlewares
   matters: `workspaceRoleMiddleware` reads the membership row `organizationMemberMiddleware`
   sets.
-- Workspace/member/invitation services exist but have no routes yet (auth and organizations are
-  the wired domains). `ActivityLogger` is called from the organizations and workspaces services
-  only; members and invitations write no audit rows yet.
-- Domain tables lack `relations()` and several indexes (see `docs/user_space.md` § Known gaps).
+- Workspace/member/invitation services exist but have no routes yet (auth, organizations, users,
+  and workspaces are the wired domains). `ActivityLogger` is called from the organizations and
+  workspaces services only; members and invitations write no audit rows yet.
+- Domain tables lack `relations()` and several indexes (see `docs/data-model.md` § Known gaps).
 - "At least one organization owner" is not enforced anywhere.
 - Invitation acceptance still needs verified-email matching and a "not already a member" check in
   the service.
@@ -186,7 +197,7 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   the appropriate `subPath`, MIME allowlist, and max size; assets must be removed when replaced.
 - New error type -> a class in `src/utils/` with `code`, `name`, and `handle(c)`, registered in
   the `onError` chain.
-- Tenancy/auth behavior -> check `docs/user_space.md` before changing anything.
+- Tenancy/auth behavior -> check `docs/data-model.md` before changing anything.
 
 ## Working agreements
 

@@ -1,8 +1,25 @@
-# Restaurant Management Engine — Project Overview
+# Product Scope
 
-## Overview
+`restaurant-manager-api` is the authoritative backend for a restaurant's operational state. It owns
+the domain rules for catalog, floor, orders, kitchen, inventory, staff, and money, and exposes them
+through a consistent, validated API consumed by any number of clients (POS, kitchen display,
+customer ordering, admin, back office). It enforces state transitions, money integrity,
+concurrency, idempotency, tenancy, and permissions in one place, so every surface shares a single
+source of truth. Reports, tickets, and stock levels are derived projections of the event stream,
+not separately maintained data.
 
-A restaurant management engine is the authoritative backend for a restaurant's operational state. It owns the domain rules for catalog, floor, orders, kitchen, inventory, staff, and money, and exposes them through a consistent, validated, event-driven API consumed by any number of clients (POS, kitchen display, customer ordering, admin, back office). It enforces state transitions, money integrity, concurrency, idempotency, tenancy, and permissions in one place, so every surface shares a single source of truth. Reports, tickets, and stock levels are derived projections of the event stream, not separately maintained data.
+## Implementation status
+
+The tenancy foundation is built; the operational domains below are scoped but not implemented.
+
+| Domain | Status | Notes |
+| --- | --- | --- |
+| Identity & auth | **Built** | Better Auth (email/password + username), session cookies, profile management |
+| Tenancy (organizations, workspaces, members) | **Built** | Services + routes for organizations, users, workspaces; member service exists (routes pending) |
+| Invitations | **Schema built** | Table + flows documented in `docs/data-model.md`; service/routes pending |
+| Audit log | **Built (partial writers)** | `activity_logs` + `ActivityLogger`; organization/workspace mutations audited |
+| Permissions scaffold | **Built (partial enforcement)** | Catalogs + `checkLevelPermissions`; enforced on organization and workspace update routes |
+| Catalog, Floor, Orders, Kitchen, Inventory, Staff, Payments, Reporting | **Planned** | See capabilities below |
 
 ## Capabilities
 
@@ -125,19 +142,34 @@ A restaurant management engine is the authoritative backend for a restaurant's o
 
 ### Platform & Technical
 
-94. Multi-tenant model: tenant, location, resource.
+94. Multi-tenant model: tenant, location, resource (see `docs/data-model.md` for the tenancy
+    design).
 95. Validate every request against a schema.
 96. Publish an OpenAPI document.
 97. Emit domain events for every state change.
 98. Expose webhooks for integrations.
 99. Support offline client sync with conflict resolution.
-100.  Maintain an append-only audit log.
-101.  Version and migrate the database schema.
-102.  Validate configuration at startup.
-103.  Integrate with receipt printers.
-104.  Integrate with payment terminals.
-105.  Integrate with delivery aggregators.
-106.  Integrate with accounting systems.
-107.  Support loyalty and customer accounts.
-108.  Expose health and readiness endpoints.
-109.  Enforce rate limits and request logging.
+100. Maintain an append-only audit log.
+101. Version and migrate the database schema.
+102. Validate configuration at startup.
+103. Integrate with receipt printers.
+104. Integrate with payment terminals.
+105. Integrate with delivery aggregators.
+106. Integrate with accounting systems.
+107. Support loyalty and customer accounts.
+108. Expose health and readiness endpoints.
+109. Enforce rate limits and request logging.
+
+## Cross-cutting rules that shape every domain
+
+- **Tenancy first.** Every operational row carries a `workspace_id` FK; every query is scoped by an
+  authorized workspace. Workspace access requires organization membership (`docs/data-model.md`).
+- **Permissions on every mutation.** Route handlers resolve roles from membership rows and check
+  `checkLevelPermissions(...)` — never from client input.
+- **Money is integer minor units.** Payments are an immutable ledger; never store card data.
+- **Audit every state change.** Each mutation writes an `activity_logs` row on the same transaction
+  via `ActivityLogger`, using the entity's definition from `src/utils/activityDefinitions.ts`.
+- **Events over projections.** Reports, kitchen tickets, and stock levels remain derived
+  projections of domain events; event emission is not implemented yet.
+- **Idempotency and optimistic concurrency** are required for order mutations (version columns,
+  idempotency keys) once the orders domain lands.
