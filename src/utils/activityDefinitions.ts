@@ -1,3 +1,4 @@
+import type { OrganizationInvitation } from "../db/schemas/organizationInvitations";
 import type { Organization } from "../db/schemas/organizations";
 import type { Workspace } from "../db/schemas/workspaces";
 import { defineActivity } from "./activityLoggerHelpers";
@@ -34,10 +35,37 @@ const workspaceActivity = defineActivity<Workspace>()({
   },
 });
 
+/**
+ * Audit definition for organization invitations. The summary names the invitee
+ * address so a feed stays readable after the invitation is deleted; `diff`
+ * captures status transitions and the expiry window.
+ */
+const organizationInvitationActivity = defineActivity<OrganizationInvitation>()({
+  entityType: "organization_invitation",
+  actions: ["created", "updated", "revoked"],
+  diff: ["invitedUserEmail", "status", "expiresAt"],
+  summarize: ({ action, actor, before, after }) => {
+    const email = after?.invitedUserEmail ?? before?.invitedUserEmail;
+
+    return `${actor} ${action} invitation${email ? ` for "${email}"` : ""}`;
+  },
+});
+
 type WorkspaceActivityAction = (typeof workspaceActivity)["actions"][number];
 
 type OrganizationActivityAction =
   (typeof organizationActivity)["actions"][number];
 
-export type { WorkspaceActivityAction, OrganizationActivityAction };
-export { workspaceActivity, organizationActivity };
+type OrganizationInvitationActivityAction =
+  (typeof organizationInvitationActivity)["actions"][number];
+
+export type {
+  WorkspaceActivityAction,
+  OrganizationActivityAction,
+  OrganizationInvitationActivityAction,
+};
+export {
+  workspaceActivity,
+  organizationActivity,
+  organizationInvitationActivity,
+};

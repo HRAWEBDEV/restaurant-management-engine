@@ -138,9 +138,10 @@ account is matched by verified email when the invitation is accepted.
 
 There is no scheduler: a `pending` row past `expires_at` is expired lazily on read/next invite.
 
-> The schema exists but there is **no invitations service or route yet**. Its insert Zod schema is
-> also not narrowed — it still exposes `id`, `invitedBy`, `status`, `acceptedAt`, `createdAt` —
-> so route-level schemas must narrow these before use (see Known gaps).
+> The schema exists and is served by `OrganizationInvitationsService`
+> (`getOrganizationInvitations`, `sendInvite`); there is **no invitations route yet**. Its insert
+> Zod schema is also not narrowed — it still exposes `id`, `invitedBy`, `status`, `acceptedAt`,
+> `createdAt` — so route-level schemas must narrow these before use (see Known gaps).
 
 ### `workspaces` — `workspaces.ts`
 
@@ -389,12 +390,13 @@ same executor/transaction as the mutation):
 
 Definitions live in `src/utils/activityDefinitions.ts`, built with `defineActivity<TEntity>()` —
 typed so the `diff` allowlist references real entity fields and a typo in `action` fails at compile
-time. Defined today: `organizationActivity` and `workspaceActivity` (`created`, `updated`,
-`deleted`; diffs over their mutable fields).
+time. Defined today: `organizationActivity`, `workspaceActivity`, and `organizationInvitationActivity`
+(`created` so far; diffs over their mutable fields).
 
 Current writers: `OrganizationsService.updateOrganization` (`organization.updated`),
 `WorkspacesService.createWorkspace` (`workspace.created`) and `updateWorkspace`
-(`workspace.updated`). Members and invitations write no audit rows yet.
+(`workspace.updated`), and `OrganizationInvitationsService.sendInvite`
+(`invitation.created`). Members write no audit rows yet.
 
 ## Constraints and invariants
 
@@ -422,9 +424,10 @@ Expected but **not** enforced:
 1. **Invitation acceptance is unimplemented.** When built, it must require a verified email,
    compare case-insensitively (normalized on write), and check "not already a member" in the
    service.
-2. **No invitation service/routes or member routes yet.** `OrganizationMembersService` exists
-   (`getOrganizationMembers`, `updateOrganizationRole`) but nothing mounts it. Members and
-   invitations write no audit rows.
+2. **No invitation/member routes yet.** `OrganizationMembersService`
+   (`getOrganizationMembers`, `updateOrganizationRole`) and
+   `OrganizationInvitationsService` (`getOrganizationInvitations`, `sendInvite`) exist but
+   nothing mounts them. Members write no audit rows; invitations audit `created` only.
 3. **Zod schemas leak server-managed fields.** `insertOrganizationInvitationSchema` is not narrowed
    (exposes `id`, `invitedBy`, `status`, `acceptedAt`, `createdAt`); the member insert schemas still
    expose `addedBy`. Narrow at the route layer; always set `invitedBy`/`addedBy` from the session.
