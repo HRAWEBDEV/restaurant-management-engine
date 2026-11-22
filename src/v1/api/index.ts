@@ -8,6 +8,10 @@ import { ForbiddenError } from "../../utils/ForbiddenError";
 import { InternalError } from "../../utils/InternalError";
 import { NotFoundError } from "../../utils/NotFoundError";
 import { authRoutes } from "./routes/auth";
+import {
+  invitationsRoutes,
+  organizationInvitationsRoutes,
+} from "./routes/invitations";
 import { organizationsRoutes } from "./routes/organizations";
 import { usersRoutes } from "./routes/users";
 import { workspacesRoutes } from "./routes/workspaces";
@@ -54,12 +58,21 @@ apiV1Routes.use(authMiddleware);
 apiV1Routes.route("/", organizationsRoutes);
 apiV1Routes.route("/", usersRoutes);
 apiV1Routes.route("/", workspacesRoutes);
+// the invitee inbox is session-scoped (an invitee is not a member yet), so it
+// mounts before the tenant middlewares
+apiV1Routes.route("/", invitationsRoutes);
 
 // tenant context middlewares, applied from here on — every route registered
 // after these lines requires the x-organization-id / x-workspace-id headers.
 // organizationMemberMiddleware MUST stay above workspaceRoleMiddleware,
 // which reads the organization membership it puts on the context.
 apiV1Routes.use(organizationMemberMiddleware);
+
+// organization-scoped invitations: the tenant header scopes every route and
+// permission middleware enforces the grants; no workspace role is needed, so
+// they mount between the two tenant middlewares.
+apiV1Routes.route("/", organizationInvitationsRoutes);
+
 apiV1Routes.use(workspaceRoleMiddleware);
 
 // global error handling, keep this after all routes
