@@ -20,12 +20,7 @@ app.get("/role", (c) => {
 });
 
 app.get("/missing-role", (c) => {
-  try {
-    getContextWorkspaceRole(c);
-    return c.json({ message: "no error" });
-  } catch (error) {
-    return c.json({ message: (error as Error).message });
-  }
+  return c.json({ role: getContextWorkspaceRole(c) ?? null });
 });
 
 app.get("/workspace-id", (c) => {
@@ -41,9 +36,9 @@ describe("workspaceContext helpers", () => {
     expect(await (await app.request("/role")).json()).toEqual(role);
   });
 
-  it("throw when the workspace role is not set", async () => {
+  it("return undefined when the workspace role is not set", async () => {
     expect(await (await app.request("/missing-role")).json()).toEqual({
-      message: "workspace role context is not set",
+      role: null,
     });
   });
 

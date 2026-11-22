@@ -263,12 +263,20 @@ Enforcement status:
   members without the grant get 403.
 - `PATCH /workspaces/{id}` enforces `workspace:update` at `organizationWorkspace` level using both
   the caller's organization and workspace membership rows.
-- No other route or service enforces permissions yet.
+- `GET /organization/invitations` and `POST /organization/invitations` enforce
+  `organization:invitation:read` / `organization:member:invite` declaratively via
+  `requireLevelPermissions` route middleware; the organization is addressed only by the
+  `x-organization-id` header (no path param), so the header is the single source of truth and
+  non-members/unknown organizations get 403. The invitee inbox (`GET /invitations`) needs no
+  permission and no tenant header — it is session-scoped (an invitee is not a member yet) and only
+  ever returns the session user's own invitations.
 
 ## Tenant middleware chain
 
 `src/middlewares/` (wired in `src/v1/api/index.ts`; only route mounts registered **after** the
-`use(...)` lines are guarded — no current route consumes them):
+`use(...)` lines are guarded — the organization-scoped invitation routes, mounted between the two
+`use(...)` lines, are the first consumers and address the organization only through the
+`x-organization-id` header):
 
 1. `authMiddleware` — resolves the Better Auth session; sets context `user`/`session`; otherwise
    401 `NOT_SIGNED_IN`.
@@ -424,10 +432,11 @@ Expected but **not** enforced:
 1. **Invitation acceptance is unimplemented.** When built, it must require a verified email,
    compare case-insensitively (normalized on write), and check "not already a member" in the
    service.
-2. **No invitation/member routes yet.** `OrganizationMembersService`
-   (`getOrganizationMembers`, `updateOrganizationRole`) and
-   `OrganizationInvitationsService` (`getOrganizationInvitations`, `sendInvite`) exist but
-   nothing mounts them. Members write no audit rows; invitations audit `created` only.
+2. **No member routes yet.** `OrganizationMembersService`
+   (`getOrganizationMembers`, `updateOrganizationRole`) exists but nothing mounts it; members
+   write no audit rows. Invitations have routes (`GET /invitations`,
+   `GET|POST /organizations/{organizationId}/invitations`) and audit `created` only — the
+   accept/decline/revoke routes are still unimplemented.
 3. **Zod schemas leak server-managed fields.** `insertOrganizationInvitationSchema` is not narrowed
    (exposes `id`, `invitedBy`, `status`, `acceptedAt`, `createdAt`); the member insert schemas still
    expose `addedBy`. Narrow at the route layer; always set `invitedBy`/`addedBy` from the session.

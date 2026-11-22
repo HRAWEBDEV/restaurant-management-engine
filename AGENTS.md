@@ -162,13 +162,20 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 - Permissions enforcement is just starting: `checkLevelPermissions` is called in the organizations
   routes (`organization:update` on `PATCH /{id}` and `PUT /{id}/logo`, resolved from the caller's
   `organization_members` row) and in the workspaces route (`workspace:update` on `PATCH /{id}`,
-  checked at `organizationWorkspace` level from both membership rows). No other route or service
-  enforces permissions yet.
+  checked at `organizationWorkspace` level from both membership rows). The organization-scoped
+  invitation routes enforce permissions declaratively via `requireLevelPermissions` route
+  middleware (`organization:invitation:read`, `organization:member:invite`). No other route or
+  service enforces permissions yet.
 - Tenant context: `organizationMemberMiddleware` (resolves `x-organization-id`, sets
   `userOrganizationMember`) and `workspaceRoleMiddleware` (resolves `x-workspace-id`, sets
   `userWorkspaceMemberRole`; owners get an implicit `admin`) are wired in `src/v1/api/index.ts`
   after the currently mounted domains — only route mounts registered after those `use(...)` lines
-  are guarded. No existing route consumes the context yet. The order of the two middlewares
+  are guarded. The organization-scoped invitation routes are the first consumers, mounted between
+  the two `use(...)` lines (tenant header but no workspace role); they address the organization
+  only through the header, with no path param, so the header cannot disagree with the URL.
+  When a route does carry an organization path param, the handler must verify it matches the
+  header organization. `getContextWorkspaceRole` returns `undefined` when
+  `workspaceRoleMiddleware` has not run. The order of the two middlewares
   matters: `workspaceRoleMiddleware` reads the membership row `organizationMemberMiddleware`
   sets.
 - Workspace/member/invitation services exist but have no routes yet (auth, organizations, users,

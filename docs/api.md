@@ -84,13 +84,20 @@ Public routes → `/doc` → auth routes → `use(authMiddleware)` → protected
 | GET | `/workspaces` | Workspaces reachable through the caller's organization memberships, newest first, each joined with its organization and membership row. |
 | GET | `/workspaces/{id}` | Workspace + its organization + the caller's organization membership row + workspace membership row (null when not a workspace member); 404 when not an organization member. |
 | PATCH | `/workspaces/{id}` | Update name/description; requires `workspace:update` checked at `organizationWorkspace` level (org owner or workspace admin); name change regenerates the slug. |
+| GET | `/invitations` | Invitations addressed to the session user's email (their inbox), newest first, each joined with the inviting organization and the inviter; optional `?status=` filter. Mounted before the tenant middlewares, so no tenant header is needed. |
+| GET | `/organization/invitations` | The active organization's invitations (from `x-organization-id`), newest first, each joined with the organization and the inviter; optional `?status=` filter. Mounted after `organizationMemberMiddleware`; permission `organization:invitation:read` enforced by `requireLevelPermissions`; 403 when not a member or not permitted. |
+| POST | `/organization/invitations` | Create a pending invitation `{ invitedUserEmail }` for the active organization (`x-organization-id`); email normalized lowercase, server-set 7-day expiry, inviter from the session. Permission `organization:member:invite`; 403 when not a member or not permitted; 409 when the email is already a member or an invitation is already pending. |
 
-### Wired but unused (future mounts)
+### Tenant middlewares (partial)
 
 `organizationMemberMiddleware` and `workspaceRoleMiddleware` are registered after the current
-domain mounts. Route modules mounted after those `use(...)` lines will require the
-`x-organization-id` / `x-workspace-id` headers and receive the caller's membership rows / workspace
-role on the context (`userOrganizationMember`, `userWorkspaceMemberRole`).
+domain mounts. The organization-scoped invitation routes are mounted between the two
+`use(...)` lines: they require the `x-organization-id` header, get the caller's membership row
+on the context (`userOrganizationMember`), and enforce permissions with
+`requireLevelPermissions` declared per route. Modules mounted after the second `use(...)` line
+additionally require the `x-workspace-id` header and receive the workspace role context
+(`userWorkspaceMemberRole`); `getContextWorkspaceRole` returns `undefined` when that middleware
+has not run, so organization-level checks stay usable without it.
 
 ## Testing endpoints
 

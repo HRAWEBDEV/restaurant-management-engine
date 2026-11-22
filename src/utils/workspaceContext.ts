@@ -44,10 +44,12 @@ function getContextWorkspaceRole(
   c: Context<{
     Variables: AuthContext;
   }>,
-) {
-  const role = c.get(CONTEXT_USER_WORKSPACE_MEMBER_ROLE);
-  if (!role) throw new Error("workspace role context is not set");
-  return role;
+): WorkspaceRole | undefined {
+  // Undefined is meaningful: the workspace role middleware has not run for
+  // this request. Organization-level permission checks do not need it, and
+  // workspace-level grants resolve to "not granted" through
+  // checkLevelPermissions when the role is missing.
+  return c.get(CONTEXT_USER_WORKSPACE_MEMBER_ROLE);
 }
 
 export {
