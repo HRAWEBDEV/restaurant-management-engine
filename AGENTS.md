@@ -18,14 +18,19 @@ Design/scope lives in the docs — load them only when the task needs them:
 bun install            # install from bun.lock
 bun run dev            # NODE_ENV=development bun run --watch --check ./src/index.ts
 bun run typecheck      # bunx tsc --noEmit
+bun run test           # test:setup (create/migrate/truncate test db) + bun test with envPreload
 bun run db:generate    # diff schema -> drizzle/<timestamp>_<name>/
 bun run db:migrate     # apply pending migrations
 bun run auth:generate  # regenerate auth-schema.ts from the Better Auth config
 ```
 
 - Verify with `bun run typecheck` before finishing any change.
+- ALWAYS write tests for new or changed code that warrants them (routes, services, utils,
+  schema behavior) — not as an afterthought. Run `bun run test` to verify they pass.
 - After schema edits: `db:generate`, review the generated SQL, then `db:migrate`.
-- No test script exists yet. If tests are needed, use `bun test` (`bun:test`) and add a script.
+- Tests: `bun:test` only, colocated in `__tests__/` next to the code under test. Run tests
+  via `bun run test` (never bare `bun test <file>` — it skips the preload and hits the dev
+  database). Full rules: `docs/how_to_test.md`.
 - Never hand-edit generated artifacts: `drizzle/**`, `auth-schema.ts`.
 
 ## Layout
