@@ -1,6 +1,7 @@
 import { swaggerUI } from "@hono/swagger-ui";
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { authMiddleware } from "../../middlewares/authMiddleware";
+import { ConflictError } from "../../utils/ConflictError";
 import { ForbiddenError } from "../../utils/ForbiddenError";
 import { InternalError } from "../../utils/InternalError";
 import { NotFoundError } from "../../utils/NotFoundError";
@@ -61,6 +62,10 @@ apiV1Routes.onError((error, c) => {
   }
 
   if (error instanceof ForbiddenError) {
+    return error.handle(c);
+  }
+
+  if (error instanceof ConflictError) {
     return error.handle(c);
   }
 

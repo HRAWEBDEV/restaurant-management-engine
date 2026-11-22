@@ -22,13 +22,16 @@ async function createTestUser(
   } = {},
 ) {
   const id = `user_${nanoid(10)}`;
+  // Better Auth's username plugin stores usernames lowercase; match that so
+  // fixtures reflect what production rows look like.
+  const username = (overrides.username ?? id).toLowerCase();
   const [created] = await db
     .insert(user)
     .values({
       id,
       name: overrides.name ?? `Test User ${id}`,
       email: overrides.email ?? `${id}@example.com`,
-      username: overrides.username ?? id,
+      username,
       firstName: overrides.firstName ?? "Test",
       lastName: overrides.lastName ?? "User",
       createdAt: new Date(),

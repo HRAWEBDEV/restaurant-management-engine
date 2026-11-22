@@ -42,21 +42,55 @@ const updateUserSchema = createUpdateSchema(user).pick({
   firstName: true,
   lastName: true,
 });
+
+/**
+ * Shared per-field user schemas, reused by the sign-up (insert) and the
+ * profile-update schemas so both validate identically.
+ */
+const userNameSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .openapi({ example: "Jane Doe" });
+const userFirstNameSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .openapi({ example: "Jane" });
+const userLastNameSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .openapi({ example: "Doe" });
+const userUsernameSchema = z
+  .string()
+  .min(3)
+  .max(30)
+  .regex(/^[a-zA-Z0-9_.]+$/)
+  .optional()
+  .openapi({ example: "jane.doe" });
+
+/**
+ * Mutable profile fields for self-updates. Email is intentionally excluded:
+ * changing it must go through Better Auth's verified change-email flow.
+ */
+const updateUserInfoSchema = z.object({
+  name: userNameSchema.optional(),
+  firstName: userFirstNameSchema.optional(),
+  lastName: userLastNameSchema.optional(),
+  username: userUsernameSchema,
+  image: z.string().nullable().optional(),
+});
+
 const signUpWithEmailSchema = insertUserSchema
   .omit({ image: true })
   .extend({
-    name: z.string().min(1).max(100).openapi({ example: "Jane Doe" }),
+    name: userNameSchema,
     email: z.email().openapi({ example: "jane@example.com" }),
     password: z.string().min(8).max(128).openapi({ example: "supersecret" }),
-    username: z
-      .string()
-      .min(3)
-      .max(30)
-      .regex(/^[a-zA-Z0-9_.]+$/)
-      .optional()
-      .openapi({ example: "jane.doe" }),
-    firstName: z.string().min(1).max(100).openapi({ example: "Jane" }),
-    lastName: z.string().min(1).max(100).openapi({ example: "Doe" }),
+    username: userUsernameSchema,
+    firstName: userFirstNameSchema,
+    lastName: userLastNameSchema,
   })
   .openapi({
     example: {
@@ -73,7 +107,6 @@ const signInWithEmailSchema = z.object({
   password: z.string().min(1).openapi({ example: "supersecret" }),
   rememberMe: z.boolean().openapi({ example: true }).optional(),
 });
-
 
 export const session = pgTable(
   "session",
@@ -157,6 +190,7 @@ export {
   selectUserSchema,
   insertUserSchema,
   updateUserSchema,
+  updateUserInfoSchema,
   signUpWithEmailSchema,
   signInWithEmailSchema,
 };

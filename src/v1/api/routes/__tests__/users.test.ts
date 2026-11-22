@@ -57,6 +57,97 @@ async function signUp() {
   return { userId: body.user.id, credentials, cookie: cookieFrom(response) };
 }
 
+describe("PATCH /users/info", () => {
+  it("rejects a request without a session with 401", async () => {
+    const response = await app.request("/api/v1/users/info", {
+      method: "PATCH",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ name: "No Session" }),
+    });
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ code?: string }>(response);
+    expect(body.code).toBe("NOT_SIGNED_IN");
+  });
+
+  it("updates the signed in user's info and persists it", async () => {
+    const { credentials, cookie } = await signUp();
+
+    const response = await app.request("/api/v1/users/info", {
+      method: "PATCH",
+      headers: { ...jsonHeaders(), cookie },
+      body: JSON.stringify({
+        name: "Updated User",
+        firstName: "Updated",
+        lastName: "Person",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{
+      user: {
+        id: string;
+        name: string;
+        firstName: string;
+        lastName: string;
+        email: string;
+      };
+    }>(response);
+    expect(body.user.name).toBe("Updated User");
+    expect(body.user.firstName).toBe("Updated");
+    expect(body.user.lastName).toBe("Person");
+    expect(body.user.email).toBe(credentials.email);
+
+    const readBack = await app.request("/api/v1/users/info", {
+      headers: { cookie },
+    });
+    expect(readBack.status).toBe(200);
+    const readBody = await jsonBody<{ user: { name: string } }>(readBack);
+    expect(readBody.user.name).toBe("Updated User");
+  });
+
+  it("returns the current user when no field differs", async () => {
+    const { userId, credentials, cookie } = await signUp();
+
+    const response = await app.request("/api/v1/users/info", {
+      method: "PATCH",
+      headers: { ...jsonHeaders(), cookie },
+      body: JSON.stringify({ name: credentials.name }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ user: { id: string } }>(response);
+    expect(body.user.id).toBe(userId);
+  });
+
+  it("rejects a taken username with 409", async () => {
+    const first = await signUp();
+    const second = await signUp();
+
+    const response = await app.request("/api/v1/users/info", {
+      method: "PATCH",
+      headers: { ...jsonHeaders(), cookie: second.cookie },
+      body: JSON.stringify({ username: first.credentials.username }),
+    });
+
+    expect(response.status).toBe(409);
+    const body = await jsonBody<{ message?: string }>(response);
+    expect(body.message).toBe("username is already taken");
+  });
+
+  it("rejects invalid input with 400", async () => {
+    const { cookie } = await signUp();
+
+    const response = await app.request("/api/v1/users/info", {
+      method: "PATCH",
+      headers: { ...jsonHeaders(), cookie },
+      body: JSON.stringify({ name: "" }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+});
+
 describe("GET /users/info", () => {
   it("rejects a request without a session with 401", async () => {
     const response = await app.request("/api/v1/users/info");
