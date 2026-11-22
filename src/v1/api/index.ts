@@ -1,6 +1,8 @@
 import { swaggerUI } from "@hono/swagger-ui";
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { authMiddleware } from "../../middlewares/authMiddleware";
+import { organizationMemberMiddleware } from "../../middlewares/organizationMemberMiddleware";
+import { workspaceRoleMiddleware } from "../../middlewares/workspaceRoleMiddleware";
 import { ConflictError } from "../../utils/ConflictError";
 import { ForbiddenError } from "../../utils/ForbiddenError";
 import { InternalError } from "../../utils/InternalError";
@@ -52,6 +54,13 @@ apiV1Routes.use(authMiddleware);
 apiV1Routes.route("/", organizationsRoutes);
 apiV1Routes.route("/", usersRoutes);
 apiV1Routes.route("/", workspacesRoutes);
+
+// tenant context middlewares, applied from here on — every route registered
+// after these lines requires the x-organization-id / x-workspace-id headers.
+// organizationMemberMiddleware MUST stay above workspaceRoleMiddleware,
+// which reads the organization membership it puts on the context.
+apiV1Routes.use(organizationMemberMiddleware);
+apiV1Routes.use(workspaceRoleMiddleware);
 
 // global error handling, keep this after all routes
 apiV1Routes.notFound((c) => new NotFoundError().handle(c));

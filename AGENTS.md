@@ -118,8 +118,12 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 
 ## Domain rules that shape the code
 
-- Tenancy: `user` -> `organization_members` -> `workspace_members`, with workspace membership
-  requiring organization membership. `owner`/`admin` implicitly access all org workspaces.
+- Tenancy: `user` -> `organization_members` -> `workspace_members`, with workspace
+  membership requiring organization membership. Organization `owner` implicitly
+  holds the workspace `admin` role on every workspace of its organization
+  (owners are allowed to not be workspace members); organization `admin` may
+  create workspaces (`workspace:create`) but has no implicit workspace access —
+  workspace access comes from `workspace_members` rows.
 - Account setup has two entry points, both via `AccountsService`: `POST /api/v1/auth/account`
   (public — signs the user up, then creates organization + default workspace + session cookies)
   and `POST /api/v1/organizations/account` (signed-in user). Both create the organization with
@@ -148,9 +152,14 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   the route layer and always set `invitedBy`/`addedBy` from the session.
 - Permissions enforcement is just starting: `checkLevelPermissions` is called in the organizations
   routes (`organization:update` on `PATCH /{id}` and `PUT /{id}/logo`, resolved from the caller's
-  `organization_members` row). No other route or service enforces permissions yet, and
-  `AuthContext`'s `userOrganizationMember` / `userWorkspaceMemberRole` keys are declared but never
-  populated by `authMiddleware`.
+  `organization_members` row). No other route or service enforces permissions yet.
+- Tenant context: `organizationMemberMiddleware` (resolves `x-organization-id`, sets
+  `userOrganizationMember`) and `workspaceRoleMiddleware` (resolves `x-workspace-id`, sets
+  `userWorkspaceMemberRole`; owners get an implicit `admin`) are wired in `src/v1/api/index.ts`
+  after the currently mounted domains — only route mounts registered after those `use(...)` lines
+  are guarded. No existing route consumes the context yet. The order of the two middlewares
+  matters: `workspaceRoleMiddleware` reads the membership row `organizationMemberMiddleware`
+  sets.
 - Workspace/member/invitation services exist but have no routes yet (auth and organizations are
   the wired domains). `ActivityLogger` is called from the organizations and workspaces services
   only; members and invitations write no audit rows yet.
