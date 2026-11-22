@@ -26,6 +26,8 @@ function signUpBody() {
     email: `${id}@example.com`,
     password: "supersecret",
     username: `user_${id}`,
+    firstName: "Test",
+    lastName: "User",
   };
 }
 
@@ -67,12 +69,33 @@ describe("POST /auth/sign-up/email", () => {
     });
 
     expect(response.status).toBe(200);
-    const body = await jsonBody<{ user: { email: string; name: string } }>(
-      response,
-    );
+    const body = await jsonBody<{
+      user: { email: string; name: string; firstName: string; lastName: string };
+    }>(response);
     expect(body.user.email).toBe(credentials.email);
     expect(body.user.name).toBe(credentials.name);
+    expect(body.user.firstName).toBe(credentials.firstName);
+    expect(body.user.lastName).toBe(credentials.lastName);
     expect(response.headers.get("set-cookie")).toBeTruthy();
+  });
+
+  it("rejects a sign-up without firstName or lastName with 400", async () => {
+    const { firstName: _firstName, ...noFirstName } = signUpBody();
+    const { lastName: _lastName, ...noLastName } = signUpBody();
+
+    const missingFirstName = await app.request("/auth/sign-up/email", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify(noFirstName),
+    });
+    expect(missingFirstName.status).toBe(400);
+
+    const missingLastName = await app.request("/auth/sign-up/email", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify(noLastName),
+    });
+    expect(missingLastName.status).toBe(400);
   });
 
   it("rejects an already-registered email with 422", async () => {

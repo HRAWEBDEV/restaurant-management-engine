@@ -17,6 +17,8 @@ async function createTestUser(
     name?: string;
     email?: string;
     username?: string;
+    firstName?: string;
+    lastName?: string;
   } = {},
 ) {
   const id = `user_${nanoid(10)}`;
@@ -27,6 +29,8 @@ async function createTestUser(
       name: overrides.name ?? `Test User ${id}`,
       email: overrides.email ?? `${id}@example.com`,
       username: overrides.username ?? id,
+      firstName: overrides.firstName ?? "Test",
+      lastName: overrides.lastName ?? "User",
       createdAt: new Date(),
       updatedAt: new Date(),
     })

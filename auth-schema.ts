@@ -18,6 +18,8 @@ export const user = pgTable("user", {
     .notNull(),
   username: text("username").unique(),
   displayUsername: text("display_username"),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
 });
 
 const { createSelectSchema, createInsertSchema, createUpdateSchema } =
@@ -37,6 +39,8 @@ const updateUserSchema = createUpdateSchema(user).pick({
   email: true,
   username: true,
   image: true,
+  firstName: true,
+  lastName: true,
 });
 const signUpWithEmailSchema = insertUserSchema
   .omit({ image: true })
@@ -51,6 +55,8 @@ const signUpWithEmailSchema = insertUserSchema
       .regex(/^[a-zA-Z0-9_.]+$/)
       .optional()
       .openapi({ example: "jane.doe" }),
+    firstName: z.string().min(1).max(100).openapi({ example: "Jane" }),
+    lastName: z.string().min(1).max(100).openapi({ example: "Doe" }),
   })
   .openapi({
     example: {
@@ -58,6 +64,8 @@ const signUpWithEmailSchema = insertUserSchema
       email: "jane@example.com",
       password: "supersecret",
       username: "jane.doe",
+      firstName: "Jane",
+      lastName: "Doe",
     },
   });
 const signInWithEmailSchema = z.object({
@@ -65,6 +73,7 @@ const signInWithEmailSchema = z.object({
   password: z.string().min(1).openapi({ example: "supersecret" }),
   rememberMe: z.boolean().openapi({ example: true }).optional(),
 });
+
 
 export const session = pgTable(
   "session",

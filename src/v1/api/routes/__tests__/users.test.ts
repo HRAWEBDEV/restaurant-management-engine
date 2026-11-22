@@ -37,6 +37,8 @@ function signUpBody() {
     email: `${id}@example.com`,
     password: "supersecret",
     username: `user_${id}`,
+    firstName: "Test",
+    lastName: "User",
   };
 }
 
@@ -78,11 +80,15 @@ describe("GET /users/info", () => {
         name: string;
         email: string;
         username: string | null;
+        firstName: string;
+        lastName: string;
       };
     }>(response);
     expect(body.user.id).toBe(userId);
     expect(body.user.name).toBe(credentials.name);
     expect(body.user.email).toBe(credentials.email);
     expect(body.user.username).toBe(credentials.username);
+    expect(body.user.firstName).toBe(credentials.firstName);
+    expect(body.user.lastName).toBe(credentials.lastName);
   });
 });

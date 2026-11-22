@@ -13,6 +13,18 @@ export const auth = betterAuth({
     enabled: true,
   },
   plugins: [username(), openAPI()],
+  user: {
+    additionalFields: {
+      firstName: {
+        type: "string",
+        required: true,
+      },
+      lastName: {
+        type: "string",
+        required: true,
+      },
+    },
+  },
   session: {
     expiresIn: SESSION_EXPIRE_S,
     updateAge: SESSION_REFRESH_THRESHOLD_S,

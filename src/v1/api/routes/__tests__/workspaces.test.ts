@@ -44,6 +44,8 @@ function signUpBody() {
     email: `${id}@example.com`,
     password: "supersecret",
     username: `user_${id}`,
+    firstName: "Test",
+    lastName: "User",
   };
 }
 
