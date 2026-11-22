@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
-import { describe, expect, it } from "bun:test";
+import { rm } from "node:fs/promises";
+import { afterEach, describe, expect, it } from "bun:test";
 import { apiV1Routes } from "../../index";
 
 /**
@@ -142,6 +143,121 @@ describe("PATCH /users/info", () => {
       method: "PATCH",
       headers: { ...jsonHeaders(), cookie },
       body: JSON.stringify({ name: "" }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("PUT /users/image", () => {
+  // Image files saved by upload tests, cleaned up after each test.
+  const savedImagePaths: string[] = [];
+
+  afterEach(async () => {
+    for (const storedPath of savedImagePaths.splice(0)) {
+      await rm(`static/${storedPath}`, { force: true });
+    }
+  });
+
+  function pngFile(name = "image.png") {
+    // 1x1 transparent PNG
+    const bytes = Uint8Array.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+      0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+      0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+      0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+      0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+      0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]);
+    return new File([bytes], name, { type: "image/png" });
+  }
+
+  it("rejects a request without a session with 401", async () => {
+    const form = new FormData();
+    form.append("image", pngFile(), "image.png");
+
+    const response = await app.request("/api/v1/users/image", {
+      method: "PUT",
+      body: form,
+    });
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ code?: string }>(response);
+    expect(body.code).toBe("NOT_SIGNED_IN");
+  });
+
+  it("stores the uploaded image and updates the user", async () => {
+    const { cookie } = await signUp();
+
+    const response = await app.request("/api/v1/users/image", {
+      method: "PUT",
+      headers: { cookie },
+      body: (() => {
+        const form = new FormData();
+        form.append("image", pngFile(), "image.png");
+        return form;
+      })(),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ user: { image: string } }>(response);
+    expect(body.user.image).toMatch(/^users\/images\/image-.+\.png$/);
+    savedImagePaths.push(body.user.image);
+
+    const file = Bun.file(`static/${body.user.image}`);
+    expect(await file.exists()).toBe(true);
+  });
+
+  it("removes the replaced image file", async () => {
+    const { cookie } = await signUp();
+
+    const first = await app.request("/api/v1/users/image", {
+      method: "PUT",
+      headers: { cookie },
+      body: (() => {
+        const form = new FormData();
+        form.append("image", pngFile(), "image.png");
+        return form;
+      })(),
+    });
+    const firstBody = await jsonBody<{ user: { image: string } }>(first);
+    savedImagePaths.push(firstBody.user.image);
+
+    const second = await app.request("/api/v1/users/image", {
+      method: "PUT",
+      headers: { cookie },
+      body: (() => {
+        const form = new FormData();
+        form.append("image", pngFile(), "replacement.png");
+        return form;
+      })(),
+    });
+    const secondBody = await jsonBody<{ user: { image: string } }>(second);
+    expect(secondBody.user.image).not.toBe(firstBody.user.image);
+    savedImagePaths.push(secondBody.user.image);
+
+    expect(await Bun.file(`static/${firstBody.user.image}`).exists()).toBe(
+      false,
+    );
+    expect(await Bun.file(`static/${secondBody.user.image}`).exists()).toBe(
+      true,
+    );
+  });
+
+  it("rejects an unsupported file type with 400", async () => {
+    const { cookie } = await signUp();
+
+    const form = new FormData();
+    form.append(
+      "image",
+      new File([new Uint8Array([1, 2, 3])], "image.gif", { type: "image/gif" }),
+      "image.gif",
+    );
+
+    const response = await app.request("/api/v1/users/image", {
+      method: "PUT",
+      headers: { cookie },
+      body: form,
     });
 
     expect(response.status).toBe(400);
