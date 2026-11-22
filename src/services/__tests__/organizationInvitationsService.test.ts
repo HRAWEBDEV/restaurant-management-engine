@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { testDb } from "../../db/__tests__/helpers/db";
 import {
@@ -7,7 +8,10 @@ import {
 } from "../../db/__tests__/helpers/factories";
 import { organizationInvitations } from "../../db/schemas/organizationInvitations";
 import { activityLogs } from "../../db/schemas/activityLogs";
-import { OrganizationInvitationsService } from "../organizationInvitationsService";
+import {
+  getOrganizationInvitationsFiltersSchema,
+  OrganizationInvitationsService,
+} from "../organizationInvitationsService";
 
 const invitationsService = new OrganizationInvitationsService(testDb);
 
@@ -62,6 +66,89 @@ describe("OrganizationInvitationsService.getOrganizationInvitations", () => {
     expect(pending).toHaveLength(1);
   });
 
+  it("lists invitations addressed to the user's email across organizations", async () => {
+    const invitee = await createTestUser(testDb);
+    const ownerA = await createTestUser(testDb);
+    const ownerB = await createTestUser(testDb);
+    const { organization: orgA } = await createTestOrganization(
+      testDb,
+      ownerA.id,
+    );
+    const { organization: orgB } = await createTestOrganization(
+      testDb,
+      ownerB.id,
+    );
+
+    const inOrgA = await invitationsService.sendInvite({
+      organizationId: orgA.id,
+      invitedBy: ownerA.id,
+      invitedUserEmail: invitee.email,
+    });
+    await invitationsService.sendInvite({
+      organizationId: orgB.id,
+      invitedBy: ownerB.id,
+      invitedUserEmail: invitee.email,
+    });
+    // Same organization, addressed to someone else: must not appear.
+    await invitationsService.sendInvite({
+      organizationId: orgA.id,
+      invitedBy: ownerA.id,
+      invitedUserEmail: "someone-else@example.com",
+    });
+
+    const { invitations } = await invitationsService.getOrganizationInvitations({
+      filters: { userId: invitee.id },
+    });
+
+    expect(invitations).toHaveLength(2);
+    expect(invitations.map((row) => row.invitation.id)).toContain(
+      inOrgA.invitation.id,
+    );
+    expect(
+      new Set(invitations.map((row) => row.organization.id)),
+    ).toEqual(new Set([orgA.id, orgB.id]));
+  });
+
+  it("narrows to one organization when both organizationId and userId are given", async () => {
+    const invitee = await createTestUser(testDb);
+    const ownerA = await createTestUser(testDb);
+    const ownerB = await createTestUser(testDb);
+    const { organization: orgA } = await createTestOrganization(
+      testDb,
+      ownerA.id,
+    );
+    const { organization: orgB } = await createTestOrganization(
+      testDb,
+      ownerB.id,
+    );
+
+    await invitationsService.sendInvite({
+      organizationId: orgA.id,
+      invitedBy: ownerA.id,
+      invitedUserEmail: invitee.email,
+    });
+    await invitationsService.sendInvite({
+      organizationId: orgB.id,
+      invitedBy: ownerB.id,
+      invitedUserEmail: invitee.email,
+    });
+
+    const { invitations } = await invitationsService.getOrganizationInvitations({
+      filters: { organizationId: orgA.id, userId: invitee.id },
+    });
+
+    expect(invitations).toHaveLength(1);
+    expect(invitations[0]?.organization.id).toBe(orgA.id);
+  });
+
+  it("returns no invitations for an unknown user", async () => {
+    const { invitations } = await invitationsService.getOrganizationInvitations({
+      filters: { userId: randomUUID() },
+    });
+
+    expect(invitations).toEqual([]);
+  });
+
   it("expires stale pending rows on read", async () => {
     const owner = await createTestUser(testDb);
     const { organization } = await createTestOrganization(testDb, owner.id);
@@ -83,6 +170,23 @@ describe("OrganizationInvitationsService.getOrganizationInvitations", () => {
 
     expect(invitations[0]?.invitation.id).toBe(stale?.id);
     expect(invitations[0]?.invitation.status).toBe("expired");
+  });
+});
+
+describe("getOrganizationInvitationsFiltersSchema", () => {
+  it("requires at least one of organizationId or userId", () => {
+    expect(getOrganizationInvitationsFiltersSchema.safeParse({}).success).toBe(
+      false,
+    );
+    expect(
+      getOrganizationInvitationsFiltersSchema.safeParse({
+        organizationId: randomUUID(),
+      }).success,
+    ).toBe(true);
+    expect(
+      getOrganizationInvitationsFiltersSchema.safeParse({ userId: "user_x" })
+        .success,
+    ).toBe(true);
   });
 });
 

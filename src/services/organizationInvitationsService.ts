@@ -46,10 +46,17 @@ function isUniqueViolation(error: unknown) {
   );
 }
 
-const getOrganizationInvitationsFiltersSchema = z.object({
-  organizationId: z.uuid(),
-  status: z.enum(organizationInvitationStatusEnum.enumValues).optional(),
-});
+const getOrganizationInvitationsFiltersSchema = z
+  .object({
+    organizationId: z.uuid().optional(),
+    userId: z.string().optional(),
+    status: z.enum(organizationInvitationStatusEnum.enumValues).optional(),
+  })
+  .refine(
+    (filters) =>
+      filters.organizationId !== undefined || filters.userId !== undefined,
+    { message: "organizationId or userId is required" },
+  );
 
 type GetOrganizationInvitationsFilters = z.infer<
   typeof getOrganizationInvitationsFiltersSchema
@@ -102,31 +109,66 @@ class OrganizationInvitationsService {
   constructor(private readonly db: DBExecutor) {}
 
   /**
-   * Returns an organization's invitations, newest first, joined with the
-   * organization and the inviter's user row. Optionally narrowed by status.
+   * Returns invitations newest first, joined with the organization and the
+   * inviter's user row. At least one of `organizationId` (an organization's
+   * invitations) or `userId` (invitations addressed to that user's email, their
+   * inbox) is required; both narrow the read to one organization's invitations
+   * for one user. Optionally narrowed by status.
    *
    * There is no scheduler: pending rows past `expires_at` are flipped to
-   * `expired` here before the read, so callers never see stale pending rows.
+   * `expired` here before the read, scoped to the filters being read, so
+   * callers never see stale pending rows.
    */
   async getOrganizationInvitations(
     props: GetOrganizationInvitationsProps,
   ): Promise<GetOrganizationInvitationsResponse> {
-    const filterConditions: SQL[] = [
-      eq(
-        organizationInvitations.organizationId,
-        props.filters.organizationId,
-      ),
-    ];
+    const filters = props.filters;
+    let inviteeEmail: string | undefined;
 
-    if (props.filters.status) {
-      filterConditions.push(
-        eq(organizationInvitations.status, props.filters.status),
-      );
+    if (filters.userId) {
+      const { user: invitee } = await new UsersService(this.db).getUserById({
+        id: filters.userId,
+      });
+
+      if (!invitee) {
+        return { invitations: [] };
+      }
+
+      inviteeEmail = invitee.email.toLowerCase();
+    }
+
+    if (!filters.organizationId && !inviteeEmail) {
+      // Unreachable through the filters schema; guarded so the read can never
+      // degrade into an unscoped full-table scan.
+      throw new InternalError("organizationId or userId filter is required");
     }
 
     await this.expireStalePendingInvitations({
-      organizationId: props.filters.organizationId,
+      organizationId: filters.organizationId,
+      invitedUserEmail: inviteeEmail,
     });
+
+    const filterConditions: SQL[] = [];
+
+    if (filters.organizationId) {
+      filterConditions.push(
+        eq(organizationInvitations.organizationId, filters.organizationId),
+      );
+    }
+
+    if (inviteeEmail) {
+      // Invitations are stored normalized to lowercase; lowering both sides
+      // keeps the comparison safe for rows written before that invariant.
+      filterConditions.push(
+        sql`lower(${organizationInvitations.invitedUserEmail}) = ${inviteeEmail}`,
+      );
+    }
+
+    if (filters.status) {
+      filterConditions.push(
+        eq(organizationInvitations.status, filters.status),
+      );
+    }
 
     const invitations = await this.db
       .select({
@@ -241,23 +283,29 @@ class OrganizationInvitationsService {
 
   /**
    * Flips pending rows past `expires_at` to `expired` (lazy expiry). Scoped to
-   * one organization, optionally to a single invitee address. Runs on the
-   * caller's executor so it participates in an enclosing transaction.
+   * an organization and/or a single invitee address; at least one scope is
+   * required. Runs on the caller's executor so it participates in an enclosing
+   * transaction.
    */
   private async expireStalePendingInvitations(props: {
-    organizationId: string;
+    organizationId?: string;
     invitedUserEmail?: string;
     executor?: DBExecutor;
   }) {
     const conditions: SQL[] = [
-      eq(organizationInvitations.organizationId, props.organizationId),
       eq(organizationInvitations.status, "pending"),
       lt(organizationInvitations.expiresAt, new Date()),
     ];
 
+    if (props.organizationId) {
+      conditions.push(
+        eq(organizationInvitations.organizationId, props.organizationId),
+      );
+    }
+
     if (props.invitedUserEmail) {
       conditions.push(
-        eq(organizationInvitations.invitedUserEmail, props.invitedUserEmail),
+        sql`lower(${organizationInvitations.invitedUserEmail}) = ${props.invitedUserEmail}`,
       );
     }
 
