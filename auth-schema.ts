@@ -108,6 +108,15 @@ const signInWithEmailSchema = z.object({
   rememberMe: z.boolean().openapi({ example: true }).optional(),
 });
 
+const changePasswordSchema = z.object({
+  currentPassword: z
+    .string()
+    .min(1)
+    .openapi({ example: "supersecret" }),
+  newPassword: z.string().min(8).max(128).openapi({ example: "newsupersecret" }),
+  revokeOtherSessions: z.boolean().openapi({ example: true }).optional(),
+});
+
 export const session = pgTable(
   "session",
   {
@@ -193,4 +202,5 @@ export {
   updateUserInfoSchema,
   signUpWithEmailSchema,
   signInWithEmailSchema,
+  changePasswordSchema,
 };

@@ -1,6 +1,7 @@
 import { createRoute, z, OpenAPIHono } from "@hono/zod-openapi";
 import { isAPIError } from "better-auth/api";
 import {
+  changePasswordSchema,
   selectUserSchema,
   signInWithEmailSchema,
   signUpWithEmailSchema,
@@ -274,6 +275,106 @@ authRoutes.openapi(signOutRoute, async (c) => {
           code: error.body?.code,
         }),
         StatusCodes.BAD_REQUEST,
+      );
+    }
+
+    throw error;
+  }
+});
+
+const changePasswordResponseSchema = z.object({
+  token: z.string().nullable().optional(),
+  user: selectUserSchema,
+});
+
+const changePasswordRoute = createRoute({
+  method: "post",
+  path: "/change-password",
+  tags: ["auth"],
+  summary: "Change the signed in user's password",
+  description:
+    "Requires the current password. With revokeOtherSessions, every other session of the user is revoked while the current one stays signed in.",
+  request: {
+    body: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: changePasswordSchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Password changed",
+      content: {
+        "application/json": {
+          schema: changePasswordResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: "Invalid input",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in, or the current password is wrong",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+authRoutes.openapi(changePasswordRoute, async (c) => {
+  const body = c.req.valid("json");
+
+  try {
+    const { headers, response } = await auth.api.changePassword({
+      body,
+      headers: c.req.raw.headers,
+      returnHeaders: true,
+    });
+
+    for (const cookie of headers.getSetCookie()) {
+      c.header("Set-Cookie", cookie, { append: true });
+    }
+
+    // Better Auth's changePassword type omits the configured additional
+    // fields, though the runtime user includes them.
+    const user = response.user as typeof response.user & {
+      firstName: string;
+      lastName: string;
+    };
+
+    return c.json(
+      {
+        token: response.token,
+        user: toAuthUser(user),
+      },
+      200,
+    );
+  } catch (error) {
+    if (isAPIError(error)) {
+      // Better Auth reports a wrong current password as BAD_REQUEST with
+      // code INVALID_PASSWORD; surface it as 401 like sign-in failures.
+      const status =
+        error.statusCode === 401 || error.body?.code === "INVALID_PASSWORD"
+          ? StatusCodes.UNAUTHORIZED
+          : StatusCodes.BAD_REQUEST;
+
+      return c.json(
+        createErrorResponse({
+          message: error.body?.message ?? error.message,
+          code: error.body?.code,
+        }),
+        status,
       );
     }
 

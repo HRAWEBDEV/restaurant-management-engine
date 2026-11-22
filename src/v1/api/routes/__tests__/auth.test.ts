@@ -58,6 +58,19 @@ async function signUp(payload = signUpBody()) {
   return { body: await response.json(), credentials: payload };
 }
 
+/** Signs up and returns the session cookie for the new session. */
+async function signUpCookie(payload = signUpBody()) {
+  const response = await app.request("/auth/sign-up/email", {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (response.status !== 200) {
+    throw new Error(`sign up failed with status ${response.status}`);
+  }
+  return cookieFrom(response);
+}
+
 describe("POST /auth/sign-up/email", () => {
   it("creates the user and sets the session cookies", async () => {
     const credentials = signUpBody();
@@ -192,6 +205,94 @@ describe("POST /auth/sign-out", () => {
     const body = await jsonBody<{ success: boolean }>(response);
     expect(body.success).toBe(true);
     expect(response.headers.get("set-cookie")).toBeTruthy();
+  });
+});
+
+describe("POST /auth/change-password", () => {
+  it("rejects a request without a session with 401", async () => {
+    const response = await app.request("/auth/change-password", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        currentPassword: "supersecret",
+        newPassword: "newsupersecret",
+      }),
+    });
+
+    expect(response.status).toBe(401);
+  });
+
+  it("rejects a wrong current password with 401", async () => {
+    const credentials = signUpBody();
+    const cookie = await signUpCookie(credentials);
+
+    const response = await app.request("/auth/change-password", {
+      method: "POST",
+      headers: { ...jsonHeaders(), cookie },
+      body: JSON.stringify({
+        currentPassword: "wrongpassword",
+        newPassword: "newsupersecret",
+      }),
+    });
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ message?: string }>(response);
+    expect(typeof body.message).toBe("string");
+  });
+
+  it("changes the password and only the new one signs in", async () => {
+    const credentials = signUpBody();
+    const cookie = await signUpCookie(credentials);
+    const newPassword = "newsupersecret";
+
+    const response = await app.request("/auth/change-password", {
+      method: "POST",
+      headers: { ...jsonHeaders(), cookie },
+      body: JSON.stringify({
+        currentPassword: credentials.password,
+        newPassword,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ user: { email: string } }>(response);
+    expect(body.user.email).toBe(credentials.email);
+
+    const oldPasswordSignIn = await app.request("/auth/sign-in/email", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        email: credentials.email,
+        password: credentials.password,
+      }),
+    });
+    expect(oldPasswordSignIn.status).toBe(401);
+
+    const newPasswordSignIn = await app.request("/auth/sign-in/email", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        email: credentials.email,
+        password: newPassword,
+      }),
+    });
+    expect(newPasswordSignIn.status).toBe(200);
+  });
+
+  it("rejects a too short new password with 400", async () => {
+    const credentials = signUpBody();
+    const cookie = await signUpCookie(credentials);
+
+    const response = await app.request("/auth/change-password", {
+      method: "POST",
+      headers: { ...jsonHeaders(), cookie },
+      body: JSON.stringify({
+        currentPassword: credentials.password,
+        newPassword: "short",
+      }),
+    });
+
+    expect(response.status).toBe(400);
   });
 });
 
