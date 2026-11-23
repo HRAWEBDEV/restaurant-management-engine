@@ -161,8 +161,10 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   the route layer and always set `invitedBy`/`addedBy` from the session.
 - Permissions enforcement is just starting: `checkLevelPermissions` is called in the organizations
   routes (`organization:update` on `PATCH /{id}` and `PUT /{id}/logo`, resolved from the caller's
-  `organization_members` row) and in the workspaces route (`workspace:update` on `PATCH /{id}`,
-  checked at `organizationWorkspace` level from both membership rows). The organization-scoped
+  `organization_members` row) and in the workspaces routes (`workspace:update` on `PATCH /{id}` and
+  `workspace:member:update`/`workspace:member:remove` on `PATCH|DELETE /{id}/members/{memberId}`,
+  checked at `organizationWorkspace` level from both membership rows, with the organization owner's
+  implicit workspace admin applied by `effectiveWorkspaceRole`). The organization-scoped
   invitation routes enforce permissions declaratively via `requireLevelPermissions` route
   middleware (`organization:invitation:read`, `organization:member:invite`). No other route or
   service enforces permissions yet.

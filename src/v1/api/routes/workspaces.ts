@@ -1,6 +1,13 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { StatusCodes } from "http-status-codes";
 import { db } from "../../../db/connect";
+import type { OrganizationMember } from "../../../db/schemas/organizationMembers";
+import {
+  selectWorkspaceMemberSchema,
+  workspaceRoles,
+} from "../../../db/schemas/workspaceMembers";
+import type { WorkspaceMember } from "../../../db/schemas/workspaceMembers";
+import { WorkspaceMembersService, getWorkspaceMembersResponseSchema } from "../../../services/workspaceMembersService";
 import {
   getWorkspacesResponseSchema,
   getWorkspaceWithMembershipResponseSchema,
@@ -17,6 +24,23 @@ import { errorResponseSchema } from "../../utils/apiErrorResponse";
 const workspacesRoutes = new OpenAPIHono<{
   Variables: AuthContext;
 }>().basePath("/workspaces");
+
+/**
+ * The caller's workspace role with the organization owner's implicit admin
+ * applied (owners hold the workspace admin role on every workspace of their
+ * organization), mirroring workspaceRoleMiddleware. undefined when the caller
+ * has no workspace role.
+ */
+function effectiveWorkspaceRole(
+  membership: OrganizationMember,
+  workspaceMembership: WorkspaceMember | null,
+): WorkspaceMember["role"] | undefined {
+  if (workspaceMembership) {
+    return workspaceMembership.role;
+  }
+
+  return membership.role === "owner" ? "admin" : undefined;
+}
 
 const getWorkspacesRoute = createRoute({
   method: "get",
@@ -153,6 +177,169 @@ const updateWorkspaceRoute = createRoute({
   },
 });
 
+const updateWorkspaceMemberRoleBodySchema = z.object({
+  role: z.enum(workspaceRoles),
+});
+
+const getWorkspaceMembersRoute = createRoute({
+  method: "get",
+  path: "/{id}/members",
+  tags: ["workspaces"],
+  summary: "List the members of a workspace",
+  description:
+    "Returns the workspace's memberships, oldest join first, each joined with the workspace, its organization, the member's user row (through the underlying organization membership), and the user who added them (null when unknown). Requests outside the caller's organizations are reported as not found.",
+  request: {
+    params: z.object({
+      id: z.uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Workspace members with their membership rows",
+      content: {
+        "application/json": {
+          schema: getWorkspaceMembersResponseSchema,
+        },
+      },
+    },
+    404: {
+      description:
+        "Workspace not found, or the caller is not a member of its organization",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+const updateWorkspaceMemberRoleRoute = createRoute({
+  method: "patch",
+  path: "/{id}/members/{memberId}",
+  tags: ["workspaces"],
+  summary: "Update the role of a workspace member",
+  description:
+    "Changes a member's workspace role. Requires workspace:member:update — granted to workspace admins, with organization owners holding the workspace admin role implicitly; callers cannot change their own role. Requests outside the caller's organizations and memberships from another workspace are reported as not found.",
+  request: {
+    params: z.object({
+      id: z.uuid(),
+      memberId: z.uuid(),
+    }),
+    body: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: updateWorkspaceMemberRoleBodySchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Workspace member role updated",
+      content: {
+        "application/json": {
+          schema: z.object({ member: selectWorkspaceMemberSchema }),
+        },
+      },
+    },
+    400: {
+      description: "Invalid input",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    403: {
+      description:
+        "The caller's roles do not grant workspace:member:update, or they are trying to change their own role",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description:
+        "Workspace not found, the caller is not a member of its organization, or the membership does not exist in it",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+const removeWorkspaceMemberRoute = createRoute({
+  method: "delete",
+  path: "/{id}/members/{memberId}",
+  tags: ["workspaces"],
+  summary: "Remove a member from a workspace",
+  description:
+    "Removes a workspace membership. Requires workspace:member:remove — granted to workspace admins, with organization owners holding the workspace admin role implicitly; callers cannot remove their own membership. Requests outside the caller's organizations and memberships from another workspace are reported as not found.",
+  request: {
+    params: z.object({
+      id: z.uuid(),
+      memberId: z.uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Member removed; returns the removed membership row",
+      content: {
+        "application/json": {
+          schema: z.object({ member: selectWorkspaceMemberSchema }),
+        },
+      },
+    },
+    403: {
+      description:
+        "The caller's roles do not grant workspace:member:remove, or they are trying to remove their own membership",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description:
+        "Workspace not found, the caller is not a member of its organization, or the membership does not exist in it",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
 workspacesRoutes.openapi(getWorkspacesRoute, async (c) => {
   const user = getContextUser(c);
 
@@ -226,6 +413,127 @@ workspacesRoutes.openapi(updateWorkspaceRoute, async (c) => {
   }
 
   return c.json({ workspace: updatedWorkspace }, StatusCodes.OK);
+});
+
+workspacesRoutes.openapi(getWorkspaceMembersRoute, async (c) => {
+  const user = getContextUser(c);
+  const { id } = c.req.valid("param");
+
+  // Scoped through the caller's organization membership: a workspace outside
+  // the caller's organizations is reported as not found.
+  const { workspace } = await new WorkspacesService(db).getWorkspaceById({
+    id,
+    userId: user.id,
+  });
+
+  if (!workspace) {
+    throw new NotFoundError("workspace not found");
+  }
+
+  const { members } = await new WorkspaceMembersService(db).getWorkspaceMembers(
+    { filters: { workspaceId: id } },
+  );
+
+  return c.json({ members }, StatusCodes.OK);
+});
+
+workspacesRoutes.openapi(updateWorkspaceMemberRoleRoute, async (c) => {
+  const user = getContextUser(c);
+  const { id, memberId } = c.req.valid("param");
+  const { role } = c.req.valid("json");
+
+  const { workspace, membership, workspaceMembership } =
+    await new WorkspacesService(db).getWorkspaceById({
+      id,
+      userId: user.id,
+    });
+
+  if (!workspace || !membership) {
+    throw new NotFoundError("workspace not found");
+  }
+
+  // The roles come from the membership rows, never from the request.
+  // Organization owners hold the workspace admin role implicitly, so the
+  // combined level lets both owners and workspace admins manage members.
+  const allowed = checkLevelPermissions({
+    level: "organizationWorkspace",
+    permission: "workspace:member:update",
+    organizationRole: membership.role,
+    workspaceRole: effectiveWorkspaceRole(membership, workspaceMembership),
+  });
+
+  if (!allowed) {
+    throw new ForbiddenError(
+      "you do not have permission to update workspace member roles",
+    );
+  }
+
+  // Callers cannot change their own workspace role.
+  if (workspaceMembership && memberId === workspaceMembership.id) {
+    throw new ForbiddenError("you cannot change your own workspace role");
+  }
+
+  const { member } = await new WorkspaceMembersService(db).updateWorkspaceRole({
+    id: memberId,
+    workspaceId: id,
+    role,
+    actorUserId: user.id,
+  });
+
+  if (!member) {
+    throw new NotFoundError("workspace member not found");
+  }
+
+  return c.json({ member }, StatusCodes.OK);
+});
+
+workspacesRoutes.openapi(removeWorkspaceMemberRoute, async (c) => {
+  const user = getContextUser(c);
+  const { id, memberId } = c.req.valid("param");
+
+  const { workspace, membership, workspaceMembership } =
+    await new WorkspacesService(db).getWorkspaceById({
+      id,
+      userId: user.id,
+    });
+
+  if (!workspace || !membership) {
+    throw new NotFoundError("workspace not found");
+  }
+
+  // Organization owners hold the workspace admin role implicitly, so the
+  // combined level lets both owners and workspace admins manage members.
+  const allowed = checkLevelPermissions({
+    level: "organizationWorkspace",
+    permission: "workspace:member:remove",
+    organizationRole: membership.role,
+    workspaceRole: effectiveWorkspaceRole(membership, workspaceMembership),
+  });
+
+  if (!allowed) {
+    throw new ForbiddenError(
+      "you do not have permission to remove workspace members",
+    );
+  }
+
+  // Callers cannot remove their own workspace membership.
+  if (workspaceMembership && memberId === workspaceMembership.id) {
+    throw new ForbiddenError("you cannot remove your own workspace membership");
+  }
+
+  const { member } = await new WorkspaceMembersService(db).removeWorkspaceMember(
+    {
+      id: memberId,
+      workspaceId: id,
+      actorUserId: user.id,
+    },
+  );
+
+  if (!member) {
+    throw new NotFoundError("workspace member not found");
+  }
+
+  return c.json({ member }, StatusCodes.OK);
 });
 
 export { workspacesRoutes };

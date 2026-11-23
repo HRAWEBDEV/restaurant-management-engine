@@ -6,7 +6,10 @@ import { testDb } from "../../../../db/__tests__/helpers/db";
 import {
   addOrganizationMember,
   addWorkspaceMember,
+  createTestWorkspace,
 } from "../../../../db/__tests__/helpers/factories";
+import { activityLogs } from "../../../../db/schemas/activityLogs";
+import { workspaceMembers } from "../../../../db/schemas/workspaceMembers";
 import { workspaces } from "../../../../db/schemas/workspaces";
 
 /**
@@ -255,5 +258,612 @@ describe("PATCH /workspaces/{id}", () => {
     });
 
     expect(response.status).toBe(400);
+  });
+});
+
+describe("GET /workspaces/{id}/members", () => {
+  it("lists the workspace's members with their joined rows, oldest join first", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+      addedBy: owner.userId,
+    });
+    await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: membership.id,
+      organizationId: organization.id,
+      role: "member",
+      addedBy: owner.userId,
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members`,
+      { headers: { cookie: owner.cookie } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{
+      members: Array<{
+        member: { workspaceId: string; role: string; addedBy: string | null };
+        workspace: { id: string };
+        organization: { id: string };
+        user: { id: string };
+        addedByUser: { id: string } | null;
+      }>;
+    }>(response);
+    expect(body.members).toHaveLength(2);
+    expect(body.members[0]?.user.id).toBe(owner.userId);
+    expect(body.members[0]?.member.role).toBe("admin");
+    expect(body.members[0]?.addedByUser?.id).toBe(owner.userId);
+    expect(body.members[1]?.user.id).toBe(memberUser.userId);
+    expect(body.members[1]?.member.role).toBe("member");
+    expect(body.members[1]?.member.addedBy).toBe(owner.userId);
+    expect(body.members[1]?.addedByUser?.id).toBe(owner.userId);
+    expect(body.members[1]?.workspace.id).toBe(workspace.id);
+    expect(body.members[1]?.organization.id).toBe(organization.id);
+  });
+
+  it("reports an unknown workspace as 404", async () => {
+    const { cookie } = await signUp();
+
+    const response = await app.request(
+      "/api/v1/workspaces/11111111-1111-4111-8111-111111111111/members",
+      { headers: { cookie } },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("reports a workspace outside the caller's organizations as 404", async () => {
+    const owner = await signUp();
+    const outsider = await signUp();
+    const { workspace } = await createOrganization(owner.cookie);
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members`,
+      { headers: { cookie: outsider.cookie } },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects member requests without a session with 401", async () => {
+    const response = await app.request(
+      "/api/v1/workspaces/00000000-0000-4000-8000-000000000000/members",
+    );
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ code?: string }>(response);
+    expect(body.code).toBe("NOT_SIGNED_IN");
+  });
+});
+
+describe("PATCH /workspaces/{id}/members/{memberId}", () => {
+  it("lets the organization owner change a member's role and writes an audit row", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+    const workspaceMembership = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: membership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${workspaceMembership.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: owner.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ member: { id: string; role: string } }>(
+      response,
+    );
+    expect(body.member.id).toBe(workspaceMembership.id);
+    expect(body.member.role).toBe("admin");
+
+    const [row] = await testDb
+      .select()
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.id, workspaceMembership.id));
+    expect(row?.role).toBe("admin");
+
+    const [log] = await testDb
+      .select()
+      .from(activityLogs)
+      .where(eq(activityLogs.entityId, workspaceMembership.id));
+    expect(log).toMatchObject({
+      organizationId: organization.id,
+      workspaceId: workspace.id,
+      actorUserId: owner.userId,
+      action: "updated",
+      entityType: "workspace_member",
+      entityId: workspaceMembership.id,
+      changes: { role: { from: "member", to: "admin" } },
+    });
+  });
+
+  it("lets an organization owner who is not a workspace member change a member's role", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    // Account setup makes the owner a workspace member; drop that row so only
+    // the implicit owner grant is at play.
+    await testDb
+      .delete(workspaceMembers)
+      .where(eq(workspaceMembers.workspaceId, workspace.id));
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+    const workspaceMembership = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: membership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${workspaceMembership.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: owner.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ member: { role: string } }>(response);
+    expect(body.member.role).toBe("admin");
+  });
+
+  it("lets a workspace admin change a member's role even as a plain organization member", async () => {
+    const owner = await signUp();
+    const adminUser = await signUp();
+    const targetUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const adminMembership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: adminUser.userId,
+      role: "member",
+    });
+    await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: adminMembership.id,
+      organizationId: organization.id,
+      role: "admin",
+    });
+    const targetMembership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: targetUser.userId,
+      role: "member",
+    });
+    const target = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: targetMembership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${target.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: adminUser.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ member: { role: string } }>(response);
+    expect(body.member.role).toBe("admin");
+  });
+
+  it("rejects a plain workspace member with 403", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const targetUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+    await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: membership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+    const targetMembership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: targetUser.userId,
+      role: "member",
+    });
+    const target = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: targetMembership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${target.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: memberUser.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects a workspace admin changing their own role with 403", async () => {
+    const owner = await signUp();
+    const adminUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const adminMembership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: adminUser.userId,
+      role: "member",
+    });
+    const adminWorkspaceMembership = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: adminMembership.id,
+      organizationId: organization.id,
+      role: "admin",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${adminWorkspaceMembership.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: adminUser.cookie },
+        body: JSON.stringify({ role: "member" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("reports a membership from another workspace as 404", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const otherWorkspace = await createTestWorkspace(
+      testDb,
+      organization.id,
+      owner.userId,
+    );
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+    const otherWorkspaceMembership = await addWorkspaceMember(testDb, {
+      workspaceId: otherWorkspace.id,
+      organizationMemberId: membership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${otherWorkspaceMembership.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: owner.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("reports an unknown membership id as 404", async () => {
+    const { cookie } = await signUp();
+    const { workspace } = await createOrganization(cookie);
+
+    const response = await app.request(
+      `/api/v1/workspaces/${
+        workspace.id
+      }/members/22222222-2222-4222-8222-222222222222`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects invalid role values with 400", async () => {
+    const { cookie } = await signUp();
+    const { workspace } = await createOrganization(cookie);
+
+    const response = await app.request(
+      `/api/v1/workspaces/${
+        workspace.id
+      }/members/33333333-3333-4333-8333-333333333333`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie },
+        body: JSON.stringify({ role: "owner" }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects requests without a session with 401", async () => {
+    const response = await app.request(
+      "/api/v1/workspaces/44444444-4444-4444-8444-444444444444/members/55555555-5555-4555-8555-555555555555",
+      {
+        method: "PATCH",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ code?: string }>(response);
+    expect(body.code).toBe("NOT_SIGNED_IN");
+  });
+});
+
+describe("DELETE /workspaces/{id}/members/{memberId}", () => {
+  it("lets the organization owner remove a member and writes an audit row", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+    const workspaceMembership = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: membership.id,
+      organizationId: organization.id,
+      role: "member",
+      addedBy: owner.userId,
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${workspaceMembership.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: owner.cookie },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ member: { id: string; role: string } }>(
+      response,
+    );
+    expect(body.member.id).toBe(workspaceMembership.id);
+
+    const [row] = await testDb
+      .select()
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.id, workspaceMembership.id));
+    expect(row).toBeUndefined();
+
+    const [log] = await testDb
+      .select()
+      .from(activityLogs)
+      .where(eq(activityLogs.entityId, workspaceMembership.id));
+    expect(log).toMatchObject({
+      organizationId: organization.id,
+      workspaceId: workspace.id,
+      actorUserId: owner.userId,
+      action: "deleted",
+      entityType: "workspace_member",
+      entityId: workspaceMembership.id,
+      changes: { role: { from: "member", to: null } },
+    });
+  });
+
+  it("lets an organization owner who is not a workspace member remove a member", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    // Account setup makes the owner a workspace member; drop that row so only
+    // the implicit owner grant is at play.
+    await testDb
+      .delete(workspaceMembers)
+      .where(eq(workspaceMembers.workspaceId, workspace.id));
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+    const workspaceMembership = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: membership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${workspaceMembership.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: owner.cookie },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ member: { id: string } }>(response);
+    expect(body.member.id).toBe(workspaceMembership.id);
+
+    const [row] = await testDb
+      .select()
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.id, workspaceMembership.id));
+    expect(row).toBeUndefined();
+  });
+
+  it("lets a workspace admin remove a member", async () => {
+    const owner = await signUp();
+    const adminUser = await signUp();
+    const targetUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const adminMembership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: adminUser.userId,
+      role: "member",
+    });
+    await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: adminMembership.id,
+      organizationId: organization.id,
+      role: "admin",
+    });
+    const targetMembership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: targetUser.userId,
+      role: "member",
+    });
+    const target = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: targetMembership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${target.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: adminUser.cookie },
+      },
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("rejects a plain workspace member with 403", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const targetUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+    await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: membership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+    const targetMembership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: targetUser.userId,
+      role: "member",
+    });
+    const target = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: targetMembership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${target.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: memberUser.cookie },
+      },
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects a workspace admin removing their own membership with 403", async () => {
+    const owner = await signUp();
+    const adminUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const adminMembership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: adminUser.userId,
+      role: "member",
+    });
+    const adminWorkspaceMembership = await addWorkspaceMember(testDb, {
+      workspaceId: workspace.id,
+      organizationMemberId: adminMembership.id,
+      organizationId: organization.id,
+      role: "admin",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${adminWorkspaceMembership.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: adminUser.cookie },
+      },
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("reports a membership from another workspace as 404", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization, workspace } = await createOrganization(owner.cookie);
+    const otherWorkspace = await createTestWorkspace(
+      testDb,
+      organization.id,
+      owner.userId,
+    );
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+    const otherWorkspaceMembership = await addWorkspaceMember(testDb, {
+      workspaceId: otherWorkspace.id,
+      organizationMemberId: membership.id,
+      organizationId: organization.id,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/workspaces/${workspace.id}/members/${otherWorkspaceMembership.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: owner.cookie },
+      },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects requests without a session with 401", async () => {
+    const response = await app.request(
+      "/api/v1/workspaces/44444444-4444-4444-8444-444444444444/members/55555555-5555-4555-8555-555555555555",
+      { method: "DELETE" },
+    );
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ code?: string }>(response);
+    expect(body.code).toBe("NOT_SIGNED_IN");
   });
 });
