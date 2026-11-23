@@ -301,3 +301,148 @@ describe("OrganizationMembersService.addOrganizationMember", () => {
     expect(members).toHaveLength(0);
   });
 });
+
+describe("OrganizationMembersService.removeOrganizationMember", () => {
+  it("deletes the membership and returns the removed row", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+    const memberUser = await createTestUser(testDb);
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.id,
+      role: "member",
+      addedBy: owner.id,
+    });
+
+    const { member } = await membersService.removeOrganizationMember({
+      id: membership.id,
+      organizationId: organization.id,
+      actorUserId: owner.id,
+    });
+
+    expect(member).toMatchObject({
+      id: membership.id,
+      organizationId: organization.id,
+      userId: memberUser.id,
+      role: "member",
+    });
+
+    const { member: gone } = await membersService.getOrganizationMemberById({
+      id: membership.id,
+      organizationId: organization.id,
+    });
+    expect(gone).toBeNull();
+  });
+
+  it("returns null for unknown ids", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+
+    const { member } = await membersService.removeOrganizationMember({
+      id: randomUUID(),
+      organizationId: organization.id,
+      actorUserId: owner.id,
+    });
+
+    expect(member).toBeNull();
+  });
+
+  it("reports a membership from another organization as missing", async () => {
+    const ownerA = await createTestUser(testDb);
+    const ownerB = await createTestUser(testDb);
+    const { organization, membership } = await createTestOrganization(
+      testDb,
+      ownerA.id,
+    );
+    const { organization: organizationB } = await createTestOrganization(
+      testDb,
+      ownerB.id,
+    );
+
+    const { member } = await membersService.removeOrganizationMember({
+      id: membership.id,
+      organizationId: organizationB.id,
+      actorUserId: ownerB.id,
+    });
+
+    expect(member).toBeNull();
+
+    const { member: untouched } = await membersService.getOrganizationMemberById(
+      {
+        id: membership.id,
+        organizationId: organization.id,
+      },
+    );
+    expect(untouched).not.toBeNull();
+  });
+
+  it("writes an organization_member.deleted activity row with the role diff", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+    const memberUser = await createTestUser(testDb);
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.id,
+      role: "admin",
+      addedBy: owner.id,
+    });
+
+    await membersService.removeOrganizationMember({
+      id: membership.id,
+      organizationId: organization.id,
+      actorUserId: owner.id,
+    });
+
+    const [log] = await testDb
+      .select()
+      .from(activityLogs)
+      .where(eq(activityLogs.entityId, membership.id));
+
+    expect(log).toMatchObject({
+      organizationId: organization.id,
+      actorUserId: owner.id,
+      action: "deleted",
+      entityType: "organization_member",
+      entityId: membership.id,
+      changes: { role: { from: "admin", to: null } },
+    });
+  });
+
+  it("rolls the audit row back together with the membership delete", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+    const memberUser = await createTestUser(testDb);
+    const membership = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.id,
+      role: "member",
+    });
+
+    await expect(
+      testDb.transaction(async (tx) => {
+        const { member } = await new OrganizationMembersService(
+          tx,
+        ).removeOrganizationMember({
+          id: membership.id,
+          organizationId: organization.id,
+          actorUserId: owner.id,
+        });
+        expect(member).not.toBeNull();
+
+        throw new Error("rollback");
+      }),
+    ).rejects.toThrow("rollback");
+
+    const [stillThere] = await testDb
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.id, membership.id));
+    expect(stillThere?.id).toBe(membership.id);
+
+    const logs = await testDb
+      .select()
+      .from(activityLogs)
+      .where(eq(activityLogs.entityId, membership.id));
+    expect(logs).toHaveLength(0);
+  });
+});

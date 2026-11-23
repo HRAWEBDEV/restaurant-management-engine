@@ -121,6 +121,24 @@ type AddOrganizationMemberResponse = z.infer<
   typeof addOrganizationMemberResponseSchema
 >;
 
+const removeOrganizationMemberSchema = z.object({
+  id: z.uuid(),
+  organizationId: z.uuid(),
+  actorUserId: z.string().min(1),
+});
+
+type RemoveOrganizationMemberProps = z.infer<
+  typeof removeOrganizationMemberSchema
+>;
+
+const removeOrganizationMemberResponseSchema = z.object({
+  member: selectOrganizationMemberSchema.nullable(),
+});
+
+type RemoveOrganizationMemberResponse = z.infer<
+  typeof removeOrganizationMemberResponseSchema
+>;
+
 /**
  * Data access service for organization memberships.
  *
@@ -290,6 +308,59 @@ class OrganizationMembersService {
 
     return { member };
   }
+
+  /**
+   * Deletes an organization membership by id, scoped to the given organization
+   * — a membership id from another organization is reported as missing.
+   * Authorization is enforced by the route layer. The delete and an
+   * `organization_member.deleted` activity row run on one transaction, diffed
+   * against the pre-delete row. Returns the deleted row or null when the
+   * membership does not exist in the organization.
+   */
+  async removeOrganizationMember(
+    props: RemoveOrganizationMemberProps,
+  ): Promise<RemoveOrganizationMemberResponse> {
+    // Snapshot label for the audit row; survives later user renames/deletes.
+    const { user: actor } = await new UsersService(this.db).getUserById({
+      id: props.actorUserId,
+    });
+    const actorLabel = actor?.name ?? "unknown user";
+
+    return this.db.transaction(async (tx) => {
+      const { member: before } = await new OrganizationMembersService(
+        tx,
+      ).getOrganizationMemberById({
+        id: props.id,
+        organizationId: props.organizationId,
+      });
+
+      if (!before) {
+        return { member: null };
+      }
+
+      const [member] = await tx
+        .delete(organizationMembers)
+        .where(eq(organizationMembers.id, before.id))
+        .returning();
+
+      if (!member) {
+        throw new InternalError("organization member delete returned no row");
+      }
+
+      // Written on the same transaction, so the audit row commits or rolls
+      // back together with the membership.
+      await new ActivityLogger(tx).recordChange(organizationMemberActivity, {
+        organizationId: props.organizationId,
+        actor: { userId: props.actorUserId, label: actorLabel },
+        action: "deleted",
+        entityId: member.id,
+        before,
+        after: null,
+      });
+
+      return { member };
+    });
+  }
 }
 
 export type {
@@ -303,6 +374,8 @@ export type {
   UpdateOrganizationRoleResponse,
   AddOrganizationMemberProps,
   AddOrganizationMemberResponse,
+  RemoveOrganizationMemberProps,
+  RemoveOrganizationMemberResponse,
 };
 export {
   getOrganizationMembersFiltersSchema,
@@ -315,5 +388,7 @@ export {
   updateOrganizationRoleResponseSchema,
   addOrganizationMemberSchema,
   addOrganizationMemberResponseSchema,
+  removeOrganizationMemberSchema,
+  removeOrganizationMemberResponseSchema,
   OrganizationMembersService,
 };

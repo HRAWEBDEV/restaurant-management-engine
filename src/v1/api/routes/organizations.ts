@@ -386,6 +386,57 @@ const updateOrganizationMemberRoleRoute = createRoute({
   },
 });
 
+const removeOrganizationMemberRoute = createRoute({
+  method: "delete",
+  path: "/{id}/members/{memberId}",
+  tags: ["organizations"],
+  summary: "Remove a member from an organization",
+  description:
+    "Removes an organization membership. Only the organization owner can remove members; owners cannot remove their own membership, so an organization is never left without an owner. Requests outside the caller's memberships and memberships from another organization are reported as not found.",
+  request: {
+    params: z.object({
+      id: z.uuid(),
+      memberId: z.uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Member removed; returns the removed membership row",
+      content: {
+        "application/json": {
+          schema: z.object({ member: selectOrganizationMemberSchema }),
+        },
+      },
+    },
+    403: {
+      description:
+        "The caller is a member but not the organization owner, or an owner trying to remove their own membership",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description:
+        "Organization not found, the caller is not a member of it, or the membership does not exist in it",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
 const createAccountRoute = createRoute({
   method: "post",
   path: "/account",
@@ -644,6 +695,46 @@ organizationsRoutes.openapi(updateOrganizationMemberRoleRoute, async (c) => {
       id: memberId,
       organizationId: id,
       role,
+      actorUserId: user.id,
+    });
+
+  if (!member) {
+    throw new NotFoundError("organization member not found");
+  }
+
+  return c.json({ member }, StatusCodes.OK);
+});
+
+organizationsRoutes.openapi(removeOrganizationMemberRoute, async (c) => {
+  const user = getContextUser(c);
+  const { id, memberId } = c.req.valid("param");
+
+  const { organization, membership } = await new OrganizationsService(
+    db,
+  ).getOrganizationById({
+    id,
+    userId: user.id,
+  });
+
+  if (!organization || !membership) {
+    throw new NotFoundError("organization not found");
+  }
+
+  // For now only the organization owner can remove members; owners are also
+  // barred from removing their own membership so the organization always
+  // keeps at least one owner.
+  if (membership.role !== "owner") {
+    throw new ForbiddenError("only the organization owner can remove members");
+  }
+
+  if (memberId === membership.id) {
+    throw new ForbiddenError("you cannot remove your own membership");
+  }
+
+  const { member } =
+    await new OrganizationMembersService(db).removeOrganizationMember({
+      id: memberId,
+      organizationId: id,
       actorUserId: user.id,
     });
 

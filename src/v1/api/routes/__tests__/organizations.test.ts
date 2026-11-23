@@ -744,3 +744,177 @@ describe("PATCH /organizations/{id}/members/{memberId}", () => {
     expect(body.code).toBe("NOT_SIGNED_IN");
   });
 });
+
+describe("DELETE /organizations/{id}/members/{memberId}", () => {
+  it("lets the owner remove a member and writes an audit row", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+    const member = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+      addedBy: owner.userId,
+    });
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${member.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: owner.cookie },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ member: { id: string; role: string } }>(
+      response,
+    );
+    expect(body.member.id).toBe(member.id);
+    expect(body.member.role).toBe("member");
+
+    const [row] = await testDb
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.id, member.id));
+    expect(row).toBeUndefined();
+
+    const [log] = await testDb
+      .select()
+      .from(activityLogs)
+      .where(eq(activityLogs.entityId, member.id));
+    expect(log).toMatchObject({
+      organizationId: organization.id,
+      actorUserId: owner.userId,
+      action: "deleted",
+      entityType: "organization_member",
+      entityId: member.id,
+      changes: { role: { from: "member", to: null } },
+    });
+  });
+
+  it("rejects a member whose organization role is not owner with 403", async () => {
+    const owner = await signUp();
+    const adminUser = await signUp();
+    const targetUser = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+    await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: adminUser.userId,
+      role: "admin",
+    });
+    const target = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: targetUser.userId,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${target.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: adminUser.cookie },
+      },
+    );
+
+    expect(response.status).toBe(403);
+
+    const [unchanged] = await testDb
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.id, target.id));
+    // Sanity: the request never reached the database.
+    expect(unchanged?.id).toBe(target.id);
+  });
+
+  it("rejects an owner removing their own membership with 403", async () => {
+    const owner = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+    const [ownerMembership] = await testDb
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.organizationId, organization.id));
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${ownerMembership?.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: owner.cookie },
+      },
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("reports an organization outside the caller's memberships as 404", async () => {
+    const owner = await signUp();
+    const outsider = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+    const memberUser = await signUp();
+    const member = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${member.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: outsider.cookie },
+      },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("reports a membership from another organization as 404", async () => {
+    const ownerA = await signUp();
+    const ownerB = await signUp();
+    const { organization } = await createOrganization(ownerA.cookie);
+    const { organization: otherOrganization } = await createOrganization(
+      ownerB.cookie,
+    );
+    const [otherMembership] = await testDb
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.organizationId, otherOrganization.id));
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${otherMembership?.id}`,
+      {
+        method: "DELETE",
+        headers: { cookie: ownerA.cookie },
+      },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("reports an unknown membership id as 404", async () => {
+    const owner = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+
+    const response = await app.request(
+      `/api/v1/organizations/${
+        organization.id
+      }/members/22222222-2222-4222-8222-222222222222`,
+      {
+        method: "DELETE",
+        headers: { cookie: owner.cookie },
+      },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects requests without a session with 401", async () => {
+    const response = await app.request(
+      "/api/v1/organizations/44444444-4444-4444-8444-444444444444/members/55555555-5555-4555-8555-555555555555",
+      { method: "DELETE" },
+    );
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ code?: string }>(response);
+    expect(body.code).toBe("NOT_SIGNED_IN");
+  });
+});
