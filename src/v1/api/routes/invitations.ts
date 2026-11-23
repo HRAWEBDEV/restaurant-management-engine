@@ -4,11 +4,13 @@ import { db } from "../../../db/connect";
 import {
   getOrganizationInvitationsResponseSchema,
   OrganizationInvitationsService,
+  revokeInviteResponseSchema,
   sendInviteResponseSchema,
   sendInviteSchema,
 } from "../../../services/organizationInvitationsService";
 import { organizationInvitationStatusEnum } from "../../../db/schemas/organizationInvitations";
 import { type AuthContext, getContextUser } from "../../../utils/AuthContext";
+import { NotFoundError } from "../../../utils/NotFoundError";
 import {
   getContextOrganizationMember,
   organizationIdHeaderSchema,
@@ -189,6 +191,80 @@ const sendInviteRoute = createRoute({
   },
 });
 
+const revokeInviteRoute = createRoute({
+  method: "post",
+  path: "/organization/invitations/{invitationId}/revoke",
+  middleware: [
+    requireLevelPermissions({
+      level: "organization",
+      permission: "organization:invitation:revoke",
+    }),
+  ],
+  tags: ["invitations"],
+  summary: "Revoke a pending invitation of the active organization",
+  description:
+    "Flips a pending invitation to the terminal revoked status (rows are kept as history, never deleted). An invitation that is not pending — including one that lazily expired — is rejected as a conflict. The revoker is taken from the session. Requires membership of the organization named by the x-organization-id header and organization:invitation:revoke; anything else is rejected as forbidden. An invitation of another organization is indistinguishable from a missing one and reported as not found.",
+  request: {
+    headers: organizationIdHeaderSchema,
+    params: z.object({
+      invitationId: z.uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Pending invitation revoked",
+      content: {
+        "application/json": {
+          schema: revokeInviteResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: "Invalid input",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    403: {
+      description:
+        "Not a member of the x-organization-id organization, or the caller's role does not grant organization:invitation:revoke",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description:
+        "No invitation with that id in the x-organization-id organization",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    409: {
+      description:
+        "The invitation exists in the organization but is not pending anymore",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
 invitationsRoutes.openapi(getMyInvitationsRoute, async (c) => {
   const user = getContextUser(c);
   const { status } = c.req.valid("query");
@@ -230,6 +306,24 @@ organizationInvitationsRoutes.openapi(sendInviteRoute, async (c) => {
   });
 
   return c.json(result, StatusCodes.CREATED);
+});
+
+organizationInvitationsRoutes.openapi(revokeInviteRoute, async (c) => {
+  const { invitationId } = c.req.valid("param");
+  const member = getContextOrganizationMember(c);
+
+  const result = await new OrganizationInvitationsService(db).revokeInvite({
+    organizationId: member.organizationId,
+    invitationId,
+    // Always from the session; never from the request body.
+    revokedBy: member.userId,
+  });
+
+  if (!result) {
+    throw new NotFoundError("invitation not found");
+  }
+
+  return c.json(result, StatusCodes.OK);
 });
 
 export { invitationsRoutes, organizationInvitationsRoutes };

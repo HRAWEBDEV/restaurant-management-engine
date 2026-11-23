@@ -263,13 +263,14 @@ Enforcement status:
   members without the grant get 403.
 - `PATCH /workspaces/{id}` enforces `workspace:update` at `organizationWorkspace` level using both
   the caller's organization and workspace membership rows.
-- `GET /organization/invitations` and `POST /organization/invitations` enforce
-  `organization:invitation:read` / `organization:member:invite` declaratively via
-  `requireLevelPermissions` route middleware; the organization is addressed only by the
-  `x-organization-id` header (no path param), so the header is the single source of truth and
-  non-members/unknown organizations get 403. The invitee inbox (`GET /invitations`) needs no
-  permission and no tenant header — it is session-scoped (an invitee is not a member yet) and only
-  ever returns the session user's own invitations.
+- `GET /organization/invitations`, `POST /organization/invitations`, and
+  `POST /organization/invitations/{invitationId}/revoke` enforce
+  `organization:invitation:read` / `organization:member:invite` /
+  `organization:invitation:revoke` declaratively via `requireLevelPermissions` route middleware;
+  the organization is addressed only by the `x-organization-id` header (no path param), so the
+  header is the single source of truth and non-members/unknown organizations get 403. The invitee
+  inbox (`GET /invitations`) needs no permission and no tenant header — it is session-scoped (an
+  invitee is not a member yet) and only ever returns the session user's own invitations.
 
 ## Tenant middleware chain
 
@@ -435,8 +436,9 @@ Expected but **not** enforced:
 2. **No member routes yet.** `OrganizationMembersService`
    (`getOrganizationMembers`, `updateOrganizationRole`) exists but nothing mounts it; members
    write no audit rows. Invitations have routes (`GET /invitations`,
-   `GET|POST /organizations/{organizationId}/invitations`) and audit `created` only — the
-   accept/decline/revoke routes are still unimplemented.
+   `GET|POST /organization/invitations`,
+   `POST /organization/invitations/{invitationId}/revoke`) and audit
+   `created`/`revoked` — the accept/decline routes are still unimplemented.
 3. **Zod schemas leak server-managed fields.** `insertOrganizationInvitationSchema` is not narrowed
    (exposes `id`, `invitedBy`, `status`, `acceptedAt`, `createdAt`); the member insert schemas still
    expose `addedBy`. Narrow at the route layer; always set `invitedBy`/`addedBy` from the session.

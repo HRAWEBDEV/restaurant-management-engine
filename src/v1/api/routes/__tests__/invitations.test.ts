@@ -97,6 +97,38 @@ async function sendInvite(
   });
 }
 
+/** Revokes an invitation through the api; the tenant header names the org. */
+async function revokeInvite(
+  cookie: string,
+  organizationId: string,
+  invitationId: string,
+) {
+  return app.request(
+    `/api/v1/organization/invitations/${invitationId}/revoke`,
+    {
+      method: "POST",
+      headers: {
+        ...jsonHeaders(),
+        cookie,
+        "x-organization-id": organizationId,
+      },
+    },
+  );
+}
+
+/** Creates a pending invitation and returns its row from the response. */
+async function createPendingInvitation(
+  cookie: string,
+  organizationId: string,
+  invitedUserEmail: string,
+) {
+  const response = await sendInvite(cookie, organizationId, invitedUserEmail);
+  if (response.status !== 201) {
+    throw new Error(`invitation creation failed with status ${response.status}`);
+  }
+  return jsonBody<{ invitation: { id: string } }>(response);
+}
+
 describe("authentication guard", () => {
   it("rejects invitation requests without a session with 401", async () => {
     const responses = await Promise.all([
@@ -107,6 +139,10 @@ describe("authentication guard", () => {
         headers: jsonHeaders(),
         body: JSON.stringify({ invitedUserEmail: "x@example.com" }),
       }),
+      app.request(
+        "/api/v1/organization/invitations/f47ac10b-58cc-4372-a567-0e02b2c3d479/revoke",
+        { method: "POST", headers: jsonHeaders() },
+      ),
     ]);
     for (const response of responses) {
       expect(response.status).toBe(401);
@@ -242,6 +278,174 @@ describe("POST /organizations/{organizationId}/invitations", () => {
     expect(response.status).toBe(409);
     const body = await jsonBody<{ message?: string }>(response);
     expect(body.message).toContain("already a member");
+  });
+});
+
+describe("POST /organizations/{organizationId}/invitations/{invitationId}/revoke", () => {
+  it("revokes a pending invitation and frees its email for a new invitation", async () => {
+    const owner = await signUp();
+    const invitee = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    const { invitation } = await createPendingInvitation(
+      owner.cookie,
+      organizationId,
+      invitee.email,
+    );
+
+    const response = await revokeInvite(
+      owner.cookie,
+      organizationId,
+      invitation.id,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{
+      invitation: { id: string; status: string };
+    }>(response);
+    expect(body.invitation.id).toBe(invitation.id);
+    expect(body.invitation.status).toBe("revoked");
+
+    // Revoking frees the invitee's email: a new pending invitation succeeds.
+    const reInvite = await sendInvite(owner.cookie, organizationId, invitee.email);
+    expect(reInvite.status).toBe(201);
+  });
+
+  it("rejects a caller without organization:invitation:revoke with 403", async () => {
+    const owner = await signUp();
+    const member = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    await addOrganizationMember(testDb, {
+      organizationId,
+      userId: member.userId,
+      role: "member",
+      addedBy: owner.userId,
+    });
+    const { invitation } = await createPendingInvitation(
+      owner.cookie,
+      organizationId,
+      "someone@example.com",
+    );
+
+    const response = await revokeInvite(
+      member.cookie,
+      organizationId,
+      invitation.id,
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects callers whose x-organization-id organization they are not members of with 403", async () => {
+    const owner = await signUp();
+    const outsider = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    const { invitation } = await createPendingInvitation(
+      owner.cookie,
+      organizationId,
+      "someone@example.com",
+    );
+
+    const response = await revokeInvite(
+      outsider.cookie,
+      organizationId,
+      invitation.id,
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects requests without the x-organization-id header with 403", async () => {
+    const owner = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    const { invitation } = await createPendingInvitation(
+      owner.cookie,
+      organizationId,
+      "someone@example.com",
+    );
+
+    const response = await app.request(
+      `/api/v1/organization/invitations/${invitation.id}/revoke`,
+      {
+        method: "POST",
+        headers: { ...jsonHeaders(), cookie: owner.cookie },
+      },
+    );
+
+    expect(response.status).toBe(403);
+    const body = await jsonBody<{ message?: string }>(response);
+    expect(body.message).toContain("header is missing");
+  });
+
+  it("reports an unknown invitation id as 404", async () => {
+    const owner = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+
+    const response = await revokeInvite(
+      owner.cookie,
+      organizationId,
+      "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    );
+
+    expect(response.status).toBe(404);
+    const body = await jsonBody<{ message?: string }>(response);
+    expect(body.message).toContain("not found");
+  });
+
+  it("reports an invitation of another organization as 404", async () => {
+    const owner = await signUp();
+    const otherOwner = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    const {
+      organization: { id: otherOrganizationId },
+    } = await createOrganization(otherOwner.cookie);
+    const { invitation } = await createPendingInvitation(
+      otherOwner.cookie,
+      otherOrganizationId,
+      "someone@example.com",
+    );
+
+    const response = await revokeInvite(
+      owner.cookie,
+      organizationId,
+      invitation.id,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects revoking an invitation that is not pending anymore with 409", async () => {
+    const owner = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    const { invitation } = await createPendingInvitation(
+      owner.cookie,
+      organizationId,
+      "someone@example.com",
+    );
+    await revokeInvite(owner.cookie, organizationId, invitation.id);
+
+    const response = await revokeInvite(
+      owner.cookie,
+      organizationId,
+      invitation.id,
+    );
+
+    expect(response.status).toBe(409);
+    const body = await jsonBody<{ message?: string }>(response);
+    expect(body.message).toContain("only pending invitations");
   });
 });
 
