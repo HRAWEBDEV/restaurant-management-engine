@@ -12,6 +12,7 @@ import {
   selectOrganizationSchema,
 } from "../db/schemas/organizations";
 import { organizationActivity } from "../utils/activityDefinitions";
+import { isUniqueViolation } from "../utils/dbErrors";
 import { InternalError } from "../utils/InternalError";
 import { ActivityLogger } from "./activityLoggerService";
 import { UsersService } from "./usersService";
@@ -33,19 +34,6 @@ function toOrganizationSlugBase(name: string) {
     .replace(/-+$/, "");
 
   return base || "organization";
-}
-
-/**
- * Postgres reports unique-constraint violations with SQLSTATE 23505, which Bun
- * surfaces as `errno` on its Postgres errors.
- */
-function isUniqueViolation(error: unknown) {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "errno" in error &&
-    error.errno === "23505"
-  );
 }
 
 const getOrganizationsFiltersSchema = z.object({

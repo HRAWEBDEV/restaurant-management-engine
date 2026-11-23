@@ -17,6 +17,7 @@ import {
 } from "../db/schemas/workspaceMembers";
 import { selectWorkspaceSchema, workspaces } from "../db/schemas/workspaces";
 import { workspaceActivity } from "../utils/activityDefinitions";
+import { isUniqueViolation } from "../utils/dbErrors";
 import { InternalError } from "../utils/InternalError";
 import { ActivityLogger } from "./activityLoggerService";
 import { UsersService } from "./usersService";
@@ -35,19 +36,6 @@ function toWorkspaceSlugBase(name: string) {
     .replace(/-+$/, "");
 
   return base || "workspace";
-}
-
-/**
- * Postgres reports unique-constraint violations with SQLSTATE 23505, which Bun
- * surfaces as `errno` on its Postgres errors.
- */
-function isUniqueViolation(error: unknown) {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "errno" in error &&
-    error.errno === "23505"
-  );
 }
 
 const getWorkspacesFiltersSchema = z.object({
