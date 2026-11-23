@@ -60,7 +60,8 @@ src/
 │   ├── organizationMemberMiddleware.ts  x-organization-id header -> membership row on context
 │   └── workspaceRoleMiddleware.ts       x-workspace-id header -> workspace role on context
 ├── services/                    DB-access classes (organizations, workspaces, organization
-│                                members, users, activity logger, accounts orchestrator)
+│                                members, workspace members, users, activity logger,
+│                                accounts orchestrator)
 ├── utils/
 │   ├── AuthContext.ts           context user/session accessors + AuthContext type
 │   ├── organizationContext.ts   x-organization-id header helpers

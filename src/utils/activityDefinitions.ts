@@ -1,6 +1,7 @@
 import type { OrganizationInvitation } from "../db/schemas/organizationInvitations";
 import type { OrganizationMember } from "../db/schemas/organizationMembers";
 import type { Organization } from "../db/schemas/organizations";
+import type { WorkspaceMember } from "../db/schemas/workspaceMembers";
 import type { Workspace } from "../db/schemas/workspaces";
 import { defineActivity } from "./activityLoggerHelpers";
 
@@ -67,6 +68,21 @@ const organizationMemberActivity = defineActivity<OrganizationMember>()({
   },
 });
 
+/**
+ * Audit definition for workspace memberships. The summary names the role so
+ * a feed stays readable; `diff` captures role transitions.
+ */
+const workspaceMemberActivity = defineActivity<WorkspaceMember>()({
+  entityType: "workspace_member",
+  actions: ["created", "updated", "deleted"],
+  diff: ["role"],
+  summarize: ({ action, actor, before, after }) => {
+    const role = after?.role ?? before?.role;
+
+    return `${actor} ${action} workspace membership${role ? ` as "${role}"` : ""}`;
+  },
+});
+
 type WorkspaceActivityAction = (typeof workspaceActivity)["actions"][number];
 
 type OrganizationActivityAction =
@@ -78,15 +94,20 @@ type OrganizationInvitationActivityAction =
 type OrganizationMemberActivityAction =
   (typeof organizationMemberActivity)["actions"][number];
 
+type WorkspaceMemberActivityAction =
+  (typeof workspaceMemberActivity)["actions"][number];
+
 export type {
   WorkspaceActivityAction,
   OrganizationActivityAction,
   OrganizationInvitationActivityAction,
   OrganizationMemberActivityAction,
+  WorkspaceMemberActivityAction,
 };
 export {
   workspaceActivity,
   organizationActivity,
   organizationInvitationActivity,
   organizationMemberActivity,
+  workspaceMemberActivity,
 };
