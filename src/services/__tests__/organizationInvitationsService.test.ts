@@ -173,6 +173,83 @@ describe("OrganizationInvitationsService.getOrganizationInvitations", () => {
   });
 });
 
+describe("OrganizationInvitationsService.getOrganizationInvitation", () => {
+  it("returns the invitation for an id in the organization", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+
+    const { invitation: sent } = await invitationsService.sendInvite({
+      organizationId: organization.id,
+      invitedBy: owner.id,
+      invitedUserEmail: "get-me@example.com",
+    });
+
+    const { invitation } = (await invitationsService.getOrganizationInvitation({
+      organizationId: organization.id,
+      invitationId: sent.id,
+    }))!;
+
+    expect(invitation.id).toBe(sent.id);
+    expect(invitation.status).toBe("pending");
+    expect(invitation.invitedUserEmail).toBe("get-me@example.com");
+  });
+
+  it("returns null for an unknown id or an invitation in another organization", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+    const otherOwner = await createTestUser(testDb);
+    const { organization: otherOrganization } = await createTestOrganization(
+      testDb,
+      otherOwner.id,
+    );
+
+    const { invitation: sent } = await invitationsService.sendInvite({
+      organizationId: otherOrganization.id,
+      invitedBy: otherOwner.id,
+      invitedUserEmail: "elsewhere@example.com",
+    });
+
+    expect(
+      await invitationsService.getOrganizationInvitation({
+        organizationId: organization.id,
+        invitationId: sent.id,
+      }),
+    ).toBeNull();
+
+    expect(
+      await invitationsService.getOrganizationInvitation({
+        organizationId: organization.id,
+        invitationId: randomUUID(),
+      }),
+    ).toBeNull();
+  });
+
+  it("expires a stale pending row on read", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+
+    const [stale] = await testDb
+      .insert(organizationInvitations)
+      .values({
+        organizationId: organization.id,
+        invitedBy: owner.id,
+        invitedUserEmail: "stale@example.com",
+        expiresAt: new Date(Date.now() - 1000),
+      })
+      .returning();
+
+    const staleId = stale?.id ?? randomUUID();
+
+    const { invitation } = (await invitationsService.getOrganizationInvitation({
+      organizationId: organization.id,
+      invitationId: staleId,
+    }))!;
+
+    expect(invitation.id).toBe(staleId);
+    expect(invitation.status).toBe("expired");
+  });
+});
+
 describe("getOrganizationInvitationsFiltersSchema", () => {
   it("requires at least one of organizationId or userId", () => {
     expect(getOrganizationInvitationsFiltersSchema.safeParse({}).success).toBe(
@@ -285,5 +362,148 @@ describe("OrganizationInvitationsService.sendInvite", () => {
       );
 
     expect(staleRow).toBeDefined();
+  });
+});
+
+describe("OrganizationInvitationsService.revokeInvite", () => {
+  it("revokes a pending invitation and writes a revoked audit row", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+
+    const { invitation: sent } = await invitationsService.sendInvite({
+      organizationId: organization.id,
+      invitedBy: owner.id,
+      invitedUserEmail: "revoke-me@example.com",
+    });
+
+    const { invitation } = (await invitationsService.revokeInvite({
+      organizationId: organization.id,
+      invitationId: sent.id,
+      revokedBy: owner.id,
+    }))!;
+
+    expect(invitation.id).toBe(sent.id);
+    expect(invitation.status).toBe("revoked");
+
+    const [log] = await testDb
+      .select()
+      .from(activityLogs)
+      .where(
+        and(
+          eq(activityLogs.entityId, invitation.id),
+          eq(activityLogs.action, "revoked"),
+        ),
+      );
+
+    expect(log?.entityType).toBe("organization_invitation");
+    expect(log?.summary).toContain("revoke-me@example.com");
+    expect(log?.changes).toMatchObject({
+      status: { from: "pending", to: "revoked" },
+    });
+  });
+
+  it("returns null for an invitation outside the organization or unknown", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+    const otherOwner = await createTestUser(testDb);
+    const { organization: otherOrganization } = await createTestOrganization(
+      testDb,
+      otherOwner.id,
+    );
+
+    const { invitation: sent } = await invitationsService.sendInvite({
+      organizationId: otherOrganization.id,
+      invitedBy: otherOwner.id,
+      invitedUserEmail: "elsewhere@example.com",
+    });
+
+    expect(
+      await invitationsService.revokeInvite({
+        organizationId: organization.id,
+        invitationId: sent.id,
+        revokedBy: owner.id,
+      }),
+    ).toBeNull();
+
+    expect(
+      await invitationsService.revokeInvite({
+        organizationId: organization.id,
+        invitationId: randomUUID(),
+        revokedBy: owner.id,
+      }),
+    ).toBeNull();
+  });
+
+  it("raises ConflictError when the invitation is not pending", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+
+    const [declined] = await testDb
+      .insert(organizationInvitations)
+      .values({
+        organizationId: organization.id,
+        invitedBy: owner.id,
+        invitedUserEmail: "declined@example.com",
+        status: "declined",
+        expiresAt: new Date(Date.now() + 1000),
+      })
+      .returning();
+
+    await expect(
+      invitationsService.revokeInvite({
+        organizationId: organization.id,
+        invitationId: declined?.id ?? randomUUID(),
+        revokedBy: owner.id,
+      }),
+    ).rejects.toMatchObject({ name: "ConflictError" });
+  });
+
+  it("raises ConflictError for a stale pending invitation instead of revoking it", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+
+    const [stale] = await testDb
+      .insert(organizationInvitations)
+      .values({
+        organizationId: organization.id,
+        invitedBy: owner.id,
+        invitedUserEmail: "stale@example.com",
+        expiresAt: new Date(Date.now() - 1000),
+      })
+      .returning();
+
+    await expect(
+      invitationsService.revokeInvite({
+        organizationId: organization.id,
+        invitationId: stale?.id ?? randomUUID(),
+        revokedBy: owner.id,
+      }),
+    ).rejects.toMatchObject({ name: "ConflictError" });
+  });
+
+  it("frees the email for a new pending invitation after revoking", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+
+    const { invitation: sent } = await invitationsService.sendInvite({
+      organizationId: organization.id,
+      invitedBy: owner.id,
+      invitedUserEmail: "re-invite@example.com",
+    });
+
+    await invitationsService.revokeInvite({
+      organizationId: organization.id,
+      invitationId: sent.id,
+      revokedBy: owner.id,
+    });
+
+    const { invitation: resent } = await invitationsService.sendInvite({
+      organizationId: organization.id,
+      invitedBy: owner.id,
+      invitedUserEmail: "re-invite@example.com",
+    });
+
+    expect(resent.status).toBe("pending");
+    expect(resent.id).not.toBe(sent.id);
   });
 });
