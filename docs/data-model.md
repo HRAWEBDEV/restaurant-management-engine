@@ -134,12 +134,16 @@ one **live** invitation per address per organization. Terminal-status rows are k
 re-inviting inserts a fresh pending row instead of overwriting.
 
 The invitation is keyed by email, so the invitee does **not** need an account at invite time; the
-account is matched by verified email when the invitation is accepted.
+account is matched by email (case-insensitive) when the invitation is accepted — the
+`email_verified` flag is not enforced until a verification flow exists.
 
 There is no scheduler: a `pending` row past `expires_at` is expired lazily on read/next invite.
 
-> The schema exists and is served by `OrganizationInvitationsService`
-> (`getOrganizationInvitations`, `sendInvite`); there is **no invitations route yet**. Its insert
+> The table is served by `OrganizationInvitationsService` (`getOrganizationInvitations`,
+> `getOrganizationInvitation`, `sendInvite`, `revokeInvite`, `acceptInvite`) and mounted routes
+> (`GET /invitations`, `POST /organizations/{organizationId}/invitations/{invitationId}/accept`,
+> `GET|POST /organization/invitations`,
+> `POST /organization/invitations/{invitationId}/revoke`). Its insert
 > Zod schema is also not narrowed — it still exposes `id`, `invitedBy`, `status`, `acceptedAt`,
 > `createdAt` — so route-level schemas must narrow these before use (see Known gaps).
 
@@ -335,7 +339,7 @@ one), generates the slug with conflict retry, inserts the workspace, adds the cr
   against the pre-update row.
 - No-change requests return the current row.
 
-### 5. Invitations (send/list/revoke shipped as routes; acceptance in the service)
+### 5. Invitations (send/list/revoke/accept shipped as routes)
 
 Intended lifecycle, per the schema:
 
@@ -346,12 +350,14 @@ Intended lifecycle, per the schema:
    `(organization_id, invited_user_email)` with `targetWhere: status = 'pending'`), so a
    still-pending invite is extended and terminal rows are kept as history.
 4. Expire lazily: pending rows past `expires_at` are treated as expired on read.
-5. Acceptance (`OrganizationInvitationsService.acceptInvite`; no route yet): match the signed-in
-   user's account email case-insensitively — wrong addressee is rejected (`ForbiddenError`; the
-   `email_verified` flag is not enforced until a verification flow exists), require `pending` and
-   unexpired, insert the `organization_members` row (plain `member`, `added_by` null), then set
-   `status = 'accepted'`, `accepted_at = now()` — all in one transaction, with `invitation.accepted`
-   and `member.created` audit rows. Not pending / expired / already a member raise conflicts.
+5. Acceptance (`POST /organizations/{organizationId}/invitations/{invitationId}/accept`, backed by
+   `OrganizationInvitationsService.acceptInvite`): match the signed-in user's account email
+   case-insensitively — wrong addressee is rejected (`ForbiddenError`; the `email_verified` flag is
+   not enforced until a verification flow exists), require `pending` and unexpired, insert the
+   `organization_members` row (plain `member`, `added_by` null, via
+   `OrganizationMembersService.addOrganizationMember`), then set `status = 'accepted'`,
+   `accepted_at = now()` — all in one transaction, with `invitation.accepted` and `member.created`
+   audit rows. Not pending / expired / already a member raise conflicts. Promote roles afterwards.
 6. Revoke: transition a pending row to `revoked`, freeing the partial-index slot.
 
 ### 6. Add / remove members

@@ -116,6 +116,22 @@ async function revokeInvite(
   );
 }
 
+/**
+ * Accepts an invitation through the api as the signed in user. No tenant
+ * header: the invitee is usually not a member yet, the ids come from their
+ * inbox.
+ */
+async function acceptInvite(
+  cookie: string,
+  organizationId: string,
+  invitationId: string,
+) {
+  return app.request(
+    `/api/v1/organizations/${organizationId}/invitations/${invitationId}/accept`,
+    { method: "POST", headers: { ...jsonHeaders(), cookie } },
+  );
+}
+
 /** Creates a pending invitation and returns its row from the response. */
 async function createPendingInvitation(
   cookie: string,
@@ -141,6 +157,10 @@ describe("authentication guard", () => {
       }),
       app.request(
         "/api/v1/organization/invitations/f47ac10b-58cc-4372-a567-0e02b2c3d479/revoke",
+        { method: "POST", headers: jsonHeaders() },
+      ),
+      app.request(
+        "/api/v1/organizations/f47ac10b-58cc-4372-a567-0e02b2c3d479/invitations/f47ac10b-58cc-4372-a567-0e02b2c3d479/accept",
         { method: "POST", headers: jsonHeaders() },
       ),
     ]);
@@ -439,6 +459,155 @@ describe("POST /organizations/{organizationId}/invitations/{invitationId}/revoke
 
     const response = await revokeInvite(
       owner.cookie,
+      organizationId,
+      invitation.id,
+    );
+
+    expect(response.status).toBe(409);
+    const body = await jsonBody<{ message?: string }>(response);
+    expect(body.message).toContain("only pending invitations");
+  });
+});
+
+describe("POST /organizations/{organizationId}/invitations/{invitationId}/accept", () => {
+  it("accepts a pending invitation addressed to the session user and creates the membership", async () => {
+    const owner = await signUp();
+    const invitee = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    const { invitation } = await createPendingInvitation(
+      owner.cookie,
+      organizationId,
+      // Different casing than stored: matching is case-insensitive.
+      invitee.email.toUpperCase(),
+    );
+
+    const response = await acceptInvite(
+      invitee.cookie,
+      organizationId,
+      invitation.id,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{
+      invitation: { id: string; status: string; acceptedAt: string | null };
+      member: {
+        organizationId: string;
+        userId: string;
+        role: string;
+        addedBy: string | null;
+      };
+    }>(response);
+    expect(body.invitation.id).toBe(invitation.id);
+    expect(body.invitation.status).toBe("accepted");
+    expect(body.invitation.acceptedAt).not.toBeNull();
+    expect(body.member.organizationId).toBe(organizationId);
+    expect(body.member.userId).toBe(invitee.userId);
+    expect(body.member.role).toBe("member");
+    expect(body.member.addedBy).toBeNull();
+
+    // The invitee is now a member: the org-scoped middleware passes them and
+    // the failure comes from the member role's (empty) grants instead.
+    const orgView = await app.request("/api/v1/organization/invitations", {
+      headers: {
+        cookie: invitee.cookie,
+        "x-organization-id": organizationId,
+      },
+    });
+    expect(orgView.status).toBe(403);
+    const orgViewBody = await jsonBody<{ message?: string }>(orgView);
+    expect(orgViewBody.message).toContain("missing permission");
+
+    // The accepted invitation left the invitee's pending inbox.
+    const inbox = await app.request("/api/v1/invitations?status=pending", {
+      headers: { cookie: invitee.cookie },
+    });
+    const inboxBody = await jsonBody<{ invitations: unknown[] }>(inbox);
+    expect(inboxBody.invitations).toHaveLength(0);
+  });
+
+  it("rejects an invitation addressed to another email with 403", async () => {
+    const owner = await signUp();
+    const someoneElse = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    const { invitation } = await createPendingInvitation(
+      owner.cookie,
+      organizationId,
+      "addressed@example.com",
+    );
+
+    const response = await acceptInvite(
+      someoneElse.cookie,
+      organizationId,
+      invitation.id,
+    );
+
+    expect(response.status).toBe(403);
+    const body = await jsonBody<{ message?: string }>(response);
+    expect(body.message).toContain("addressed");
+  });
+
+  it("reports an unknown invitation id as 404", async () => {
+    const owner = await signUp();
+    const invitee = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+
+    const response = await acceptInvite(
+      invitee.cookie,
+      organizationId,
+      "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    );
+
+    expect(response.status).toBe(404);
+    const body = await jsonBody<{ message?: string }>(response);
+    expect(body.message).toContain("not found");
+  });
+
+  it("reports an invitation of another organization as 404", async () => {
+    const owner = await signUp();
+    const otherOwner = await signUp();
+    const invitee = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    const {
+      organization: { id: otherOrganizationId },
+    } = await createOrganization(otherOwner.cookie);
+    const { invitation } = await createPendingInvitation(
+      otherOwner.cookie,
+      otherOrganizationId,
+      invitee.email,
+    );
+
+    const response = await acceptInvite(
+      invitee.cookie,
+      organizationId,
+      invitation.id,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects accepting an invitation that is not pending anymore with 409", async () => {
+    const owner = await signUp();
+    const invitee = await signUp();
+    const {
+      organization: { id: organizationId },
+    } = await createOrganization(owner.cookie);
+    const { invitation } = await createPendingInvitation(
+      owner.cookie,
+      organizationId,
+      invitee.email,
+    );
+    await revokeInvite(owner.cookie, organizationId, invitation.id);
+
+    const response = await acceptInvite(
+      invitee.cookie,
       organizationId,
       invitation.id,
     );
