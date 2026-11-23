@@ -77,6 +77,7 @@ Public routes → `/doc` → auth routes → `use(authMiddleware)` → protected
 | GET | `/organizations/{id}` | Organization + the caller's membership row; 404 when not a member. |
 | GET | `/organizations/{id}/members` | The organization's members, oldest join first. Members get each row joined with the organization, the member's user row, and the user who added them (`addedByUser`, null when unknown); signed-in non-members get a limited view with only `firstName`, `lastName`, and `email` per member; 404 when the organization does not exist. |
 | PATCH | `/organizations/{id}` | Update name/logo/description; requires `organization:update` (403 otherwise); name change regenerates the slug. |
+| PATCH | `/organizations/{id}/members/{memberId}` | Change a member's organization role; for now only the organization owner may change roles (403 otherwise), and owners cannot change their own role so the organization always keeps at least one owner. 404 when the organization is unknown/not a member, or the membership is unknown or belongs to another organization; writes an `organization_member.updated` audit row. |
 | PUT | `/organizations/{id}/logo` | Multipart image (png/jpeg/webp ≤ 2 MB); requires `organization:update`; replaces and deletes the previous logo file. |
 | POST | `/organizations/account` | Create an organization + default workspace for the signed-in user (same orchestrator as `POST /auth/account`) → 201 `{ organization, workspace }`. |
 | GET | `/users/info` | The session user's profile. |

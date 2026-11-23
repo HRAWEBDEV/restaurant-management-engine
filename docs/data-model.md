@@ -408,13 +408,14 @@ same executor/transaction as the mutation):
 
 Definitions live in `src/utils/activityDefinitions.ts`, built with `defineActivity<TEntity>()` —
 typed so the `diff` allowlist references real entity fields and a typo in `action` fails at compile
-time. Defined today: `organizationActivity`, `workspaceActivity`, and `organizationInvitationActivity`
-(`created` so far; diffs over their mutable fields).
+time. Defined today: `organizationActivity`, `workspaceActivity`, `organizationInvitationActivity`,
+and `organizationMemberActivity` (diffs over their mutable fields).
 
 Current writers: `OrganizationsService.updateOrganization` (`organization.updated`),
 `WorkspacesService.createWorkspace` (`workspace.created`) and `updateWorkspace`
-(`workspace.updated`), and `OrganizationInvitationsService.sendInvite`
-(`invitation.created`). Members write no audit rows yet.
+(`workspace.updated`), `OrganizationInvitationsService.sendInvite`
+(`invitation.created`) and `acceptInvite` (`invitation.accepted`, `member.created`), and
+`OrganizationMembersService.updateOrganizationRole` (`organization_member.updated`).
 
 ## Constraints and invariants
 
@@ -442,12 +443,13 @@ Expected but **not** enforced:
 1. **Invitation acceptance is unimplemented.** When built, it must require a verified email,
    compare case-insensitively (normalized on write), and check "not already a member" in the
    service.
-2. **No member routes yet.** `OrganizationMembersService`
-   (`getOrganizationMembers`, `updateOrganizationRole`) exists but nothing mounts it; members
-   write no audit rows. Invitations have routes (`GET /invitations`,
-   `GET|POST /organization/invitations`,
-   `POST /organization/invitations/{invitationId}/revoke`) and audit
-   `created`/`revoked` — the accept/decline routes are still unimplemented.
+2. **Member routes are minimal.** `OrganizationMembersService`
+   (`getOrganizationMembers`, `updateOrganizationRole`) is mounted only through
+   `GET /organizations/{id}/members` and
+    `PATCH /organizations/{id}/members/{memberId}` (owner-only role changes, with
+   an `organization_member.updated` audit row). There are no member removal
+   routes, and the "at least one organization owner" invariant is only
+   incidentally preserved by that route's self-role-change guard.
 3. **Zod schemas leak server-managed fields.** `insertOrganizationInvitationSchema` is not narrowed
    (exposes `id`, `invitedBy`, `status`, `acceptedAt`, `createdAt`); the member insert schemas still
    expose `addedBy`. Narrow at the route layer; always set `invitedBy`/`addedBy` from the session.

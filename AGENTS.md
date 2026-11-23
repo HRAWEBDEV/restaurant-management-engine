@@ -178,11 +178,14 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   `workspaceRoleMiddleware` has not run. The order of the two middlewares
   matters: `workspaceRoleMiddleware` reads the membership row `organizationMemberMiddleware`
   sets.
-- Workspace/member/invitation services exist but have no routes yet (auth, organizations, users,
-  and workspaces are the wired domains). `ActivityLogger` is called from the organizations and
-  workspaces services only; members and invitations write no audit rows yet.
+- Workspace and invitation routes are the remaining unwired domains (auth, organizations (incl.
+  member listing and owner-only member role updates), users, and workspaces are wired).
+  `ActivityLogger` is called from the organizations, workspaces, members (role updates), and
+  invitations services.
 - Domain tables lack `relations()` and several indexes (see `docs/data-model.md` § Known gaps).
-- "At least one organization owner" is not enforced anywhere.
+- "At least one organization owner" is not enforced anywhere except incidentally: the
+  member role-update route (`PATCH /organizations/{id}/members/{memberId}`, owner-only)
+  rejects an owner changing their own role.
 - Invitation acceptance is implemented in `OrganizationInvitationsService.acceptInvite`
   (case-insensitive email matching, "not already a member" check, membership insert via
   `OrganizationMembersService.addOrganizationMember`, `invitation.accepted` + `member.created`

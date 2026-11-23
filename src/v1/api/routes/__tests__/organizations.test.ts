@@ -6,6 +6,7 @@ import { apiV1Routes } from "../../index";
 import { testDb } from "../../../../db/__tests__/helpers/db";
 import { addOrganizationMember } from "../../../../db/__tests__/helpers/factories";
 import { organizationMembers } from "../../../../db/schemas/organizationMembers";
+import { activityLogs } from "../../../../db/schemas/activityLogs";
 import { workspaceMembers } from "../../../../db/schemas/workspaceMembers";
 import { organizations } from "../../../../db/schemas/organizations";
 
@@ -541,5 +542,205 @@ describe("PUT /organizations/{id}/logo", () => {
     );
 
     expect(response.status).toBe(404);
+  });
+});
+
+describe("PATCH /organizations/{id}/members/{memberId}", () => {
+  it("lets the owner change a member's role and writes an audit row", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+    const member = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+      addedBy: owner.userId,
+    });
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${member.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: owner.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{ member: { id: string; role: string } }>(
+      response,
+    );
+    expect(body.member.id).toBe(member.id);
+    expect(body.member.role).toBe("admin");
+
+    const [row] = await testDb
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.id, member.id));
+    expect(row?.role).toBe("admin");
+
+    const [log] = await testDb
+      .select()
+      .from(activityLogs)
+      .where(eq(activityLogs.entityId, member.id));
+    expect(log).toMatchObject({
+      organizationId: organization.id,
+      actorUserId: owner.userId,
+      action: "updated",
+      entityType: "organization_member",
+      entityId: member.id,
+      changes: { role: { from: "member", to: "admin" } },
+    });
+  });
+
+  it("rejects a member whose organization role is not owner with 403", async () => {
+    const owner = await signUp();
+    const adminUser = await signUp();
+    const targetUser = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+    const admin = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: adminUser.userId,
+      role: "admin",
+    });
+    const target = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: targetUser.userId,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${target.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: adminUser.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+
+    const [unchanged] = await testDb
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.id, admin.id));
+    // Sanity: the request never reached the database.
+    expect(unchanged?.role).toBe("admin");
+  });
+
+  it("rejects an owner changing their own role with 403", async () => {
+    const owner = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+    const [ownerMembership] = await testDb
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.organizationId, organization.id));
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${ownerMembership?.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: owner.cookie },
+        body: JSON.stringify({ role: "member" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("reports an organization outside the caller's memberships as 404", async () => {
+    const owner = await signUp();
+    const outsider = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+    const memberUser = await signUp();
+    const member = await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${member.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: outsider.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("reports a membership from another organization as 404", async () => {
+    const ownerA = await signUp();
+    const ownerB = await signUp();
+    const { organization } = await createOrganization(ownerA.cookie);
+    const { organization: otherOrganization } = await createOrganization(
+      ownerB.cookie,
+    );
+    const [otherMembership] = await testDb
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.organizationId, otherOrganization.id));
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/${otherMembership?.id}`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: ownerA.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("reports an unknown membership id as 404", async () => {
+    const owner = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+
+    const response = await app.request(
+      `/api/v1/organizations/${
+        organization.id
+      }/members/22222222-2222-4222-8222-222222222222`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: owner.cookie },
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects invalid role values with 400", async () => {
+    const owner = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members/33333333-3333-4333-8333-333333333333`,
+      {
+        method: "PATCH",
+        headers: { ...jsonHeaders(), cookie: owner.cookie },
+        body: JSON.stringify({ role: "superadmin" }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects requests without a session with 401", async () => {
+    const response = await app.request(
+      "/api/v1/organizations/44444444-4444-4444-8444-444444444444/members/55555555-5555-4555-8555-555555555555",
+      {
+        method: "PATCH",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ role: "admin" }),
+      },
+    );
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ code?: string }>(response);
+    expect(body.code).toBe("NOT_SIGNED_IN");
   });
 });

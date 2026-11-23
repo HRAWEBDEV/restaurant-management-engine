@@ -2,6 +2,10 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { StatusCodes } from "http-status-codes";
 import { db } from "../../../db/connect";
 import {
+  ogMemberRoles,
+  selectOrganizationMemberSchema,
+} from "../../../db/schemas/organizationMembers";
+import {
   AccountsService,
   createAccountOrganizationSchema,
   createAccountResponseSchema,
@@ -311,6 +315,77 @@ const updateOrganizationLogoRoute = createRoute({
   },
 });
 
+const updateOrganizationMemberRoleBodySchema = z.object({
+  role: z.enum(ogMemberRoles),
+});
+
+const updateOrganizationMemberRoleRoute = createRoute({
+  method: "patch",
+  path: "/{id}/members/{memberId}",
+  tags: ["organizations"],
+  summary: "Update the role of an organization member",
+  description:
+    "Changes a member's organization role. Only the organization owner can change member roles; owners cannot change their own role, so an organization is never left without an owner. Requests outside the caller's memberships and memberships from another organization are reported as not found.",
+  request: {
+    params: z.object({
+      id: z.uuid(),
+      memberId: z.uuid(),
+    }),
+    body: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: updateOrganizationMemberRoleBodySchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Member role updated",
+      content: {
+        "application/json": {
+          schema: z.object({ member: selectOrganizationMemberSchema }),
+        },
+      },
+    },
+    400: {
+      description: "Invalid input",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    403: {
+      description:
+        "The caller is a member but not the organization owner, or an owner trying to change their own role",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description:
+        "Organization not found, the caller is not a member of it, or the membership does not exist in it",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
 const createAccountRoute = createRoute({
   method: "post",
   path: "/account",
@@ -533,6 +608,50 @@ organizationsRoutes.openapi(updateOrganizationLogoRoute, async (c) => {
   }
 
   return c.json({ organization }, StatusCodes.OK);
+});
+
+organizationsRoutes.openapi(updateOrganizationMemberRoleRoute, async (c) => {
+  const user = getContextUser(c);
+  const { id, memberId } = c.req.valid("param");
+  const { role } = c.req.valid("json");
+
+  const { organization, membership } = await new OrganizationsService(
+    db,
+  ).getOrganizationById({
+    id,
+    userId: user.id,
+  });
+
+  if (!organization || !membership) {
+    throw new NotFoundError("organization not found");
+  }
+
+  // For now only the organization owner can change member roles; owners are
+  // also barred from changing their own role so the organization always keeps
+  // at least one owner.
+  if (membership.role !== "owner") {
+    throw new ForbiddenError(
+      "only the organization owner can change member roles",
+    );
+  }
+
+  if (memberId === membership.id) {
+    throw new ForbiddenError("you cannot change your own organization role");
+  }
+
+  const { member } =
+    await new OrganizationMembersService(db).updateOrganizationRole({
+      id: memberId,
+      organizationId: id,
+      role,
+      actorUserId: user.id,
+    });
+
+  if (!member) {
+    throw new NotFoundError("organization member not found");
+  }
+
+  return c.json({ member }, StatusCodes.OK);
 });
 
 organizationsRoutes.openapi(createAccountRoute, async (c) => {

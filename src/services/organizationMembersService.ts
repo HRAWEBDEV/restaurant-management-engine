@@ -13,9 +13,12 @@ import {
   selectOrganizationSchema,
 } from "../db/schemas/organizations";
 import { selectUserSchema, user } from "../../auth-schema";
+import { ActivityLogger } from "./activityLoggerService";
+import { organizationMemberActivity } from "../utils/activityDefinitions";
 import { ConflictError } from "../utils/ConflictError";
 import { isUniqueViolation } from "../utils/dbErrors";
 import { InternalError } from "../utils/InternalError";
+import { UsersService } from "./usersService";
 
 const getOrganizationMembersFiltersSchema = z.object({
   organizationId: z.uuid(),
@@ -69,9 +72,26 @@ type GetOrganizationMembersResponse = z.infer<
   typeof getOrganizationMembersResponseSchema
 >;
 
+const getOrganizationMemberPropsSchema = z.object({
+  id: z.uuid(),
+  organizationId: z.uuid(),
+});
+
+type GetOrganizationMemberProps = z.infer<typeof getOrganizationMemberPropsSchema>;
+
+const getOrganizationMemberResponseSchema = z.object({
+  member: selectOrganizationMemberSchema.nullable(),
+});
+
+type GetOrganizationMemberResponse = z.infer<
+  typeof getOrganizationMemberResponseSchema
+>;
+
 const updateOrganizationRoleSchema = z.object({
   id: z.uuid(),
+  organizationId: z.uuid(),
   role: z.enum(ogMemberRoles),
+  actorUserId: z.string().min(1),
 });
 
 type UpdateOrganizationRoleProps = z.infer<typeof updateOrganizationRoleSchema>;
@@ -153,19 +173,81 @@ class OrganizationMembersService {
   }
 
   /**
-   * Updates the role of an organization membership by id, returning the updated
-   * row or null when the membership does not exist.
+   * Returns a membership by id, scoped to the given organization — a membership
+   * id from another organization is reported as missing. Returns null when no
+   * membership matches.
+   */
+  async getOrganizationMemberById(
+    props: GetOrganizationMemberProps,
+  ): Promise<GetOrganizationMemberResponse> {
+    const [member] = await this.db
+      .select()
+      .from(organizationMembers)
+      .where(
+        and(
+          eq(organizationMembers.id, props.id),
+          eq(organizationMembers.organizationId, props.organizationId),
+        ),
+      )
+      .limit(1);
+
+    return { member: member ?? null };
+  }
+
+  /**
+   * Updates the role of an organization membership by id, scoped to the given
+   * organization — a membership id from another organization is reported as
+   * missing. Authorization is enforced by the route layer. The update and an
+   * `organization_member.updated` activity row run on one transaction, diffed
+   * against the pre-update row. Returns the updated row or null when the
+   * membership does not exist in the organization.
    */
   async updateOrganizationRole(
     props: UpdateOrganizationRoleProps,
   ): Promise<UpdateOrganizationRoleResponse> {
-    const [member] = await this.db
-      .update(organizationMembers)
-      .set({ role: props.role })
-      .where(eq(organizationMembers.id, props.id))
-      .returning();
+    // Snapshot label for the audit row; survives later user renames/deletes.
+    const { user: actor } = await new UsersService(this.db).getUserById({
+      id: props.actorUserId,
+    });
+    const actorLabel = actor?.name ?? "unknown user";
 
-    return { member: member ?? null };
+    return this.db.transaction(async (tx) => {
+      const { member: before } = await new OrganizationMembersService(
+        tx,
+      ).getOrganizationMemberById({
+        id: props.id,
+        organizationId: props.organizationId,
+      });
+
+      if (!before) {
+        return { member: null };
+      }
+
+      const [member] = await tx
+        .update(organizationMembers)
+        .set({ role: props.role })
+        .where(eq(organizationMembers.id, before.id))
+        .returning();
+
+      if (!member) {
+        throw new InternalError(
+          "organization member role update returned no row",
+        );
+      }
+
+      // Written on the same transaction, so the audit row commits or rolls
+      // back together with the membership.
+      await new ActivityLogger(tx).recordChange(organizationMemberActivity, {
+        organizationId: props.organizationId,
+        actor: { userId: props.actorUserId, label: actorLabel },
+        action: "updated",
+        entityId: member.id,
+        before,
+        after: member,
+      });
+
+      return { member };
+    });
   }
 
   /**
@@ -215,6 +297,8 @@ export type {
   GetOrganizationMembersProps,
   GetOrganizationMembersResponse,
   GetOrganizationMembersLimitedResponse,
+  GetOrganizationMemberProps,
+  GetOrganizationMemberResponse,
   UpdateOrganizationRoleProps,
   UpdateOrganizationRoleResponse,
   AddOrganizationMemberProps,
@@ -225,6 +309,8 @@ export {
   organizationMemberWithRelationsSchema,
   getOrganizationMembersResponseSchema,
   getOrganizationMembersLimitedResponseSchema,
+  getOrganizationMemberPropsSchema,
+  getOrganizationMemberResponseSchema,
   updateOrganizationRoleSchema,
   updateOrganizationRoleResponseSchema,
   addOrganizationMemberSchema,
