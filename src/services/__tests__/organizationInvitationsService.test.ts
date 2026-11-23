@@ -537,6 +537,7 @@ describe("OrganizationInvitationsService.acceptInvite", () => {
     expect(member.organizationId).toBe(organization.id);
     expect(member.userId).toBe(invitee.id);
     expect(member.role).toBe("member");
+    expect(member.addedBy).toBe(owner.id);
 
     const [acceptedLog] = await testDb
       .select()

@@ -505,7 +505,7 @@ describe("POST /organizations/{organizationId}/invitations/{invitationId}/accept
     expect(body.member.organizationId).toBe(organizationId);
     expect(body.member.userId).toBe(invitee.userId);
     expect(body.member.role).toBe("member");
-    expect(body.member.addedBy).toBeNull();
+    expect(body.member.addedBy).toBe(owner.userId);
 
     // The invitee is now a member: the org-scoped middleware passes them and
     // the failure comes from the member role's (empty) grants instead.

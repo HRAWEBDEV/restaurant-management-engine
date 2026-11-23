@@ -469,9 +469,10 @@ class OrganizationInvitationsService {
    * expired invitation is rejected rather than accepted. Accepting an address
    * that already belongs to a member raises `ConflictError` (checked
    * in-transaction and again by the membership unique index under concurrency).
-   * `addedBy` stays null — the member joined via invitation, and the
-   * invitation row keeps the inviter. An `invitation.accepted` and a
-   * `member.created` activity row are written on the same transaction.
+    * `addedBy` is set to the invitation's `invitedBy` — the inviter is
+    * recorded on the membership row, and the invitation row keeps it too. An
+    * `invitation.accepted` and a `member.created` activity row are written on
+    * the same transaction.
    */
   async acceptInvite(
     props: AcceptInviteProps,
@@ -539,7 +540,7 @@ class OrganizationInvitationsService {
       ).addOrganizationMember({
         organizationId: props.organizationId,
         userId: props.acceptedBy,
-        addedBy: null,
+        addedBy: invitation.invitedBy,
       });
 
       // Conditional update: only a still-pending row is acceptable, so a

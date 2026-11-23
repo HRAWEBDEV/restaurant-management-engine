@@ -171,7 +171,7 @@ class OrganizationMembersService {
   /**
    * Inserts an organization membership. The role defaults to plain `member`;
    * `addedBy` records the acting user, or stays null when the member joined
-   * without being added (e.g. invitation acceptance). Callers must resolve the
+   * without being added by anyone. Callers must resolve the
    * target user and authorize the acting user first — the membership unique
    * index is the concurrency backstop, so an existing membership raises
    * `ConflictError`. Accepts a transaction executor, so it participates in an
