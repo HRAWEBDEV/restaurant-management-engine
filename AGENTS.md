@@ -217,3 +217,10 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 - Follow the patterns above instead of introducing alternatives; keep diffs focused.
 - Update the relevant `docs/*.md` when schema, API shape, or tenancy behavior changes.
 - Do not commit unless asked.
+- Commit/push workflow (follow this sequence exactly):
+  1. When the user says "now commit the changes", draft a good commit message
+     (concise, imperative mood, matching the repo's commit style) and present it
+     to the user. Do NOT commit yet.
+  2. Commit only after the user confirms the message (or approves an adjusted
+     version). If the user dictates their own message, use it verbatim.
+  3. Push only when the user explicitly says to push. Never push unprompted.
