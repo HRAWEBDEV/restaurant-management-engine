@@ -7,11 +7,15 @@ import {
   organizationMembers,
   selectOrganizationMemberSchema,
 } from "../db/schemas/organizationMembers";
+import type { OrganizationMember } from "../db/schemas/organizationMembers";
 import {
   organizations,
   selectOrganizationSchema,
 } from "../db/schemas/organizations";
 import { selectUserSchema, user } from "../../auth-schema";
+import { ConflictError } from "../utils/ConflictError";
+import { isUniqueViolation } from "../utils/dbErrors";
+import { InternalError } from "../utils/InternalError";
 
 const getOrganizationMembersFiltersSchema = z.object({
   organizationId: z.uuid(),
@@ -57,6 +61,23 @@ const updateOrganizationRoleResponseSchema = z.object({
 
 type UpdateOrganizationRoleResponse = z.infer<
   typeof updateOrganizationRoleResponseSchema
+>;
+
+const addOrganizationMemberSchema = z.object({
+  organizationId: z.uuid(),
+  userId: z.string().min(1),
+  role: z.enum(ogMemberRoles).optional(),
+  addedBy: z.string().min(1).nullish(),
+});
+
+type AddOrganizationMemberProps = z.infer<typeof addOrganizationMemberSchema>;
+
+const addOrganizationMemberResponseSchema = z.object({
+  member: selectOrganizationMemberSchema,
+});
+
+type AddOrganizationMemberResponse = z.infer<
+  typeof addOrganizationMemberResponseSchema
 >;
 
 /**
@@ -125,6 +146,47 @@ class OrganizationMembersService {
 
     return { member: member ?? null };
   }
+
+  /**
+   * Inserts an organization membership. The role defaults to plain `member`;
+   * `addedBy` records the acting user, or stays null when the member joined
+   * without being added (e.g. invitation acceptance). Callers must resolve the
+   * target user and authorize the acting user first — the membership unique
+   * index is the concurrency backstop, so an existing membership raises
+   * `ConflictError`. Accepts a transaction executor, so it participates in an
+   * enclosing transaction.
+   */
+  async addOrganizationMember(
+    props: AddOrganizationMemberProps,
+  ): Promise<AddOrganizationMemberResponse> {
+    let member: OrganizationMember | undefined;
+
+    try {
+      [member] = await this.db
+        .insert(organizationMembers)
+        .values({
+          organizationId: props.organizationId,
+          userId: props.userId,
+          role: props.role ?? "member",
+          addedBy: props.addedBy ?? null,
+        })
+        .returning();
+    } catch (error) {
+      // `organization_members_unique` is the only unique constraint on this
+      // table; a violation means the user is already a member.
+      if (isUniqueViolation(error)) {
+        throw new ConflictError("user is already a member of this organization");
+      }
+
+      throw error;
+    }
+
+    if (!member) {
+      throw new InternalError("organization member insert returned no row");
+    }
+
+    return { member };
+  }
 }
 
 export type {
@@ -133,6 +195,8 @@ export type {
   GetOrganizationMembersResponse,
   UpdateOrganizationRoleProps,
   UpdateOrganizationRoleResponse,
+  AddOrganizationMemberProps,
+  AddOrganizationMemberResponse,
 };
 export {
   getOrganizationMembersFiltersSchema,
@@ -140,5 +204,7 @@ export {
   getOrganizationMembersResponseSchema,
   updateOrganizationRoleSchema,
   updateOrganizationRoleResponseSchema,
+  addOrganizationMemberSchema,
+  addOrganizationMemberResponseSchema,
   OrganizationMembersService,
 };

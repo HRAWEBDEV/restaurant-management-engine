@@ -11,13 +11,21 @@ import {
   organizations,
   selectOrganizationSchema,
 } from "../db/schemas/organizations";
-import { organizationMembers } from "../db/schemas/organizationMembers";
+import {
+  organizationMembers,
+  selectOrganizationMemberSchema,
+} from "../db/schemas/organizationMembers";
 import { selectUserSchema, user } from "../../auth-schema";
-import { organizationInvitationActivity } from "../utils/activityDefinitions";
+import {
+  organizationInvitationActivity,
+  organizationMemberActivity,
+} from "../utils/activityDefinitions";
 import { isUniqueViolation } from "../utils/dbErrors";
 import { ConflictError } from "../utils/ConflictError";
+import { ForbiddenError } from "../utils/ForbiddenError";
 import { InternalError } from "../utils/InternalError";
 import { ActivityLogger } from "./activityLoggerService";
+import { OrganizationMembersService } from "./organizationMembersService";
 import { UsersService } from "./usersService";
 
 const INVITATION_TTL_DAYS = 7;
@@ -105,6 +113,24 @@ const revokeInviteResponseSchema = z.object({
 });
 
 type RevokeInviteResponse = z.infer<typeof revokeInviteResponseSchema>;
+
+const acceptInviteSchema = z.object({
+  organizationId: z.uuid(),
+  invitationId: z.uuid(),
+});
+
+type AcceptInviteInput = z.infer<typeof acceptInviteSchema>;
+
+type AcceptInviteProps = AcceptInviteInput & {
+  acceptedBy: string;
+};
+
+const acceptInviteResponseSchema = z.object({
+  invitation: selectOrganizationInvitationSchema,
+  member: selectOrganizationMemberSchema,
+});
+
+type AcceptInviteResponse = z.infer<typeof acceptInviteResponseSchema>;
 
 const invitedByUser = alias(user, "invited_by_user");
 
@@ -428,6 +454,140 @@ class OrganizationInvitationsService {
   }
 
   /**
+   * Accepts a pending invitation on behalf of the signed-in user: inserts the
+   * `organization_members` row (plain `member`, via
+   * `OrganizationMembersService.addOrganizationMember`) and flips the
+   * invitation to `accepted` with `accepted_at`, all in one transaction. The
+   * accepter is set from the session by the route layer.
+   *
+   * Verified-email matching: the invitation must be addressed to the accepter's
+   * account email (case-insensitive); anyone else — including a signed-in user
+   * who is not yet a member of the organization, which is the normal accepter —
+   * is rejected with `ForbiddenError`. A missing invitation in the organization
+   * returns `null` (the route layer maps that to 404). Anything not pending
+   * raises `ConflictError`; stale pending rows are lazily expired first, so an
+   * expired invitation is rejected rather than accepted. Accepting an address
+   * that already belongs to a member raises `ConflictError` (checked
+   * in-transaction and again by the membership unique index under concurrency).
+   * `addedBy` stays null — the member joined via invitation, and the
+   * invitation row keeps the inviter. An `invitation.accepted` and a
+   * `member.created` activity row are written on the same transaction.
+   */
+  async acceptInvite(
+    props: AcceptInviteProps,
+  ): Promise<AcceptInviteResponse | null> {
+    // Snapshot label for the audit rows; survives later user renames/deletes.
+    const { user: invitee } = await new UsersService(this.db).getUserById({
+      id: props.acceptedBy,
+    });
+    const actorLabel = invitee?.name ?? "unknown user";
+
+    return this.db.transaction(async (tx) => {
+      await this.expireStalePendingInvitations({
+        organizationId: props.organizationId,
+        invitationId: props.invitationId,
+        executor: tx,
+      });
+
+      const [invitation] = await tx
+        .select()
+        .from(organizationInvitations)
+        .where(
+          and(
+            eq(organizationInvitations.id, props.invitationId),
+            eq(organizationInvitations.organizationId, props.organizationId),
+          ),
+        )
+        .limit(1);
+
+      if (!invitation) {
+        return null;
+      }
+
+      // Verified-email matching: only the invited address may accept.
+      if (
+        !invitee ||
+        invitation.invitedUserEmail.toLowerCase() !==
+          invitee.email.toLowerCase()
+      ) {
+        throw new ForbiddenError("invitation is addressed to another user");
+      }
+
+      if (invitation.status !== "pending") {
+        throw new ConflictError("only pending invitations can be accepted");
+      }
+
+      const [existingMember] = await tx
+        .select({ id: organizationMembers.id })
+        .from(organizationMembers)
+        .where(
+          and(
+            eq(organizationMembers.organizationId, props.organizationId),
+            eq(organizationMembers.userId, props.acceptedBy),
+          ),
+        )
+        .limit(1);
+
+      if (existingMember) {
+        throw new ConflictError(
+          "user is already a member of this organization",
+        );
+      }
+
+      const { member } = await new OrganizationMembersService(
+        tx,
+      ).addOrganizationMember({
+        organizationId: props.organizationId,
+        userId: props.acceptedBy,
+        addedBy: null,
+      });
+
+      // Conditional update: only a still-pending row is acceptable, so a
+      // concurrent accept or revoke surfaces as a conflict and rolls the
+      // membership back with the transaction.
+      const [accepted] = await tx
+        .update(organizationInvitations)
+        .set({ status: "accepted", acceptedAt: new Date() })
+        .where(
+          and(
+            eq(organizationInvitations.id, invitation.id),
+            eq(organizationInvitations.status, "pending"),
+          ),
+        )
+        .returning();
+
+      if (!accepted) {
+        throw new ConflictError("only pending invitations can be accepted");
+      }
+
+      // Written on the same transaction, so the audit rows commit or roll back
+      // together with the acceptance.
+      const logger = new ActivityLogger(tx);
+
+      await logger.recordChange(organizationInvitationActivity, {
+        organizationId: props.organizationId,
+        workspaceId: null,
+        actor: { userId: props.acceptedBy, label: actorLabel },
+        action: "accepted",
+        entityId: accepted.id,
+        before: { ...accepted, status: "pending" },
+        after: accepted,
+      });
+
+      await logger.recordChange(organizationMemberActivity, {
+        organizationId: props.organizationId,
+        workspaceId: null,
+        actor: { userId: props.acceptedBy, label: actorLabel },
+        action: "created",
+        entityId: member.id,
+        after: member,
+      });
+
+      return { invitation: accepted, member };
+    });
+  }
+
+  /**
    * Flips pending rows past `expires_at` to `expired` (lazy expiry). Scoped to
    * an organization, a single invitee address, and/or a single invitation id;
    * at least one scope is required. Runs on the caller's executor so it
@@ -481,6 +641,9 @@ export type {
   RevokeInviteInput,
   RevokeInviteProps,
   RevokeInviteResponse,
+  AcceptInviteInput,
+  AcceptInviteProps,
+  AcceptInviteResponse,
 };
 export {
   getOrganizationInvitationResponseSchema,
@@ -491,5 +654,7 @@ export {
   sendInviteResponseSchema,
   revokeInviteSchema,
   revokeInviteResponseSchema,
+  acceptInviteSchema,
+  acceptInviteResponseSchema,
   OrganizationInvitationsService,
 };

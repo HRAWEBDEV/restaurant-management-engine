@@ -183,8 +183,10 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   workspaces services only; members and invitations write no audit rows yet.
 - Domain tables lack `relations()` and several indexes (see `docs/data-model.md` § Known gaps).
 - "At least one organization owner" is not enforced anywhere.
-- Invitation acceptance still needs verified-email matching and a "not already a member" check in
-  the service.
+- Invitation acceptance is implemented at the service level (`OrganizationInvitationsService.acceptInvite`:
+  case-insensitive email matching, "not already a member" check, `invitation.accepted` +
+  `member.created` audit rows, all in one transaction) but has no route yet. The `email_verified`
+  flag is not enforced; the accepter is matched by account email.
 
 ## Environment and runtime
 

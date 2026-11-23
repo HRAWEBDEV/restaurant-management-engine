@@ -68,3 +68,91 @@ describe("OrganizationMembersService.updateOrganizationRole", () => {
     expect(missing).toBeNull();
   });
 });
+
+describe("OrganizationMembersService.addOrganizationMember", () => {
+  it("inserts a membership defaulting to plain member with a null addedBy", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+    const member = await createTestUser(testDb);
+
+    const { member: inserted } = await membersService.addOrganizationMember({
+      organizationId: organization.id,
+      userId: member.id,
+    });
+
+    expect(inserted.organizationId).toBe(organization.id);
+    expect(inserted.userId).toBe(member.id);
+    expect(inserted.role).toBe("member");
+    expect(inserted.addedBy).toBeNull();
+
+    const { members } = await membersService.getOrganizationMembers({
+      filters: { organizationId: organization.id, userId: member.id },
+    });
+
+    expect(members).toHaveLength(1);
+  });
+
+  it("stores an explicit role and addedBy", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+    const member = await createTestUser(testDb);
+
+    const { member: inserted } = await membersService.addOrganizationMember({
+      organizationId: organization.id,
+      userId: member.id,
+      role: "admin",
+      addedBy: owner.id,
+    });
+
+    expect(inserted.role).toBe("admin");
+    expect(inserted.addedBy).toBe(owner.id);
+  });
+
+  it("raises ConflictError when the user is already a member", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+
+    await expect(
+      membersService.addOrganizationMember({
+        organizationId: organization.id,
+        userId: owner.id,
+      }),
+    ).rejects.toMatchObject({ name: "ConflictError" });
+
+    const member = await createTestUser(testDb);
+    await membersService.addOrganizationMember({
+      organizationId: organization.id,
+      userId: member.id,
+    });
+
+    await expect(
+      membersService.addOrganizationMember({
+        organizationId: organization.id,
+        userId: member.id,
+      }),
+    ).rejects.toMatchObject({ name: "ConflictError" });
+  });
+
+  it("runs on the caller's executor so a rollback undoes the insert", async () => {
+    const owner = await createTestUser(testDb);
+    const { organization } = await createTestOrganization(testDb, owner.id);
+    const member = await createTestUser(testDb);
+
+    await expect(
+      testDb.transaction(async (tx) => {
+        await new OrganizationMembersService(tx).addOrganizationMember({
+          organizationId: organization.id,
+          userId: member.id,
+        });
+
+        throw new Error("rollback");
+      }),
+    ).rejects.toThrow("rollback");
+
+    const { members } = await membersService.getOrganizationMembers({
+      filters: { organizationId: organization.id, userId: member.id },
+    });
+
+    expect(members).toHaveLength(0);
+  });
+});

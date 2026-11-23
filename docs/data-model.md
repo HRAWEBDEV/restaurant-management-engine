@@ -335,7 +335,7 @@ one), generates the slug with conflict retry, inserts the workspace, adds the cr
   against the pre-update row.
 - No-change requests return the current row.
 
-### 5. Invitations (schema in place, flows not implemented yet)
+### 5. Invitations (send/list/revoke shipped as routes; acceptance in the service)
 
 Intended lifecycle, per the schema:
 
@@ -346,9 +346,12 @@ Intended lifecycle, per the schema:
    `(organization_id, invited_user_email)` with `targetWhere: status = 'pending'`), so a
    still-pending invite is extended and terminal rows are kept as history.
 4. Expire lazily: pending rows past `expires_at` are treated as expired on read.
-5. Acceptance: match by the signed-in user's **verified** email (case-insensitive), require
-   `pending` and unexpired, insert the `organization_members` row (plain `member`), then set
-   `status = 'accepted'`, `accepted_at = now()` — all in one transaction. Promote roles afterwards.
+5. Acceptance (`OrganizationInvitationsService.acceptInvite`; no route yet): match the signed-in
+   user's account email case-insensitively — wrong addressee is rejected (`ForbiddenError`; the
+   `email_verified` flag is not enforced until a verification flow exists), require `pending` and
+   unexpired, insert the `organization_members` row (plain `member`, `added_by` null), then set
+   `status = 'accepted'`, `accepted_at = now()` — all in one transaction, with `invitation.accepted`
+   and `member.created` audit rows. Not pending / expired / already a member raise conflicts.
 6. Revoke: transition a pending row to `revoked`, freeing the partial-index slot.
 
 ### 6. Add / remove members
