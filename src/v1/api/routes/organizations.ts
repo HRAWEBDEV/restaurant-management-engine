@@ -10,6 +10,7 @@ import {
 import { type AuthContext, getContextUser } from "../../../utils/AuthContext";
 import { AssetStorage } from "../../../utils/assetStorage";
 import { ForbiddenError } from "../../../utils/ForbiddenError";
+import { logger, toError } from "../../../utils/logger";
 import { NotFoundError } from "../../../utils/NotFoundError";
 import { checkLevelPermissions } from "../../../utils/roles-permissions/checkLevelPermissions";
 import {
@@ -419,7 +420,10 @@ organizationsRoutes.openapi(updateOrganizationLogoRoute, async (c) => {
     try {
       await organizationLogoStorage.remove(existing.logo);
     } catch (error) {
-      console.error("failed to remove previous organization logo", error);
+      logger.error(
+        { err: toError(error) },
+        "failed to remove previous organization logo",
+      );
     }
   }
 

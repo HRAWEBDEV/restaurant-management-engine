@@ -10,6 +10,7 @@ import {
 } from "../../../services/usersService";
 import { type AuthContext, getContextUser } from "../../../utils/AuthContext";
 import { AssetStorage } from "../../../utils/assetStorage";
+import { logger, toError } from "../../../utils/logger";
 import { createErrorResponse, errorResponseSchema } from "../../utils/apiErrorResponse";
 
 const usersRoutes = new OpenAPIHono<{
@@ -236,7 +237,7 @@ usersRoutes.openapi(updateUserImageRoute, async (c) => {
     try {
       await userImageStorage.remove(existing.image);
     } catch (error) {
-      console.error("failed to remove previous user image", error);
+      logger.error({ err: toError(error) }, "failed to remove previous user image");
     }
   }
 

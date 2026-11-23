@@ -6,7 +6,7 @@
 Client
   │  HTTP (JSON, multipart for uploads)
   ▼
-Bun.serve  ──  src/index.ts (requestId, CORS, secure headers, static assets, shutdown hooks)
+Bun.serve  ──  src/index.ts (requestId, structured request logging, CORS, secure headers, static assets, shutdown hooks)
   ▼
 Hono app (OpenAPIHono)  ──  @hono/zod-openapi route definitions (contract + validation)
   │                        @hono/swagger-ui  →  /api/v1/doc (document) and /api/v1/doc/ui
@@ -25,8 +25,8 @@ Postgres (DATABASE_URL)
 
 ## Request lifecycle
 
-1. `src/index.ts` checks `PORT` at startup, mounts requestId/CORS/secure-headers, mounts
-   `apiV1Routes` at root, serves `static/*`, then `Bun.serve`s the app. It verifies the database
+1. `src/index.ts` checks `PORT` at startup, mounts requestId/structured-request-logging/CORS/secure-headers,
+   mounts `apiV1Routes` at root, serves `static/*`, then `Bun.serve`s the app. It verifies the database
    with `testConnection()` first and closes the SQL pool on SIGINT/SIGTERM (`stopApp`).
 2. Hono middleware resolves the Better Auth session (cookie or bearer token) and attaches the user
    and session to the request context (`AuthContext` variables).
@@ -43,7 +43,7 @@ Postgres (DATABASE_URL)
 
 ```
 src/
-├── index.ts                     entrypoint: PORT check, requestId/cors/secureHeaders, static,
+├── index.ts                     entrypoint: PORT check, requestId/requestLogger/cors/secureHeaders, static,
 │                                Bun.serve, SIGINT/SIGTERM shutdown
 ├── auth.ts                      betterAuth instance (Drizzle adapter, email/password,
 │                                username + openAPI plugins, firstName/lastName additional
@@ -116,6 +116,22 @@ Resolved versions come from `bun.lock`.
 | `@hono/swagger-ui` | `^0.6.1` | `0.6.2` | Interactive API UI at `/api/v1/doc/ui`. |
 | `zod` | `^4.6.7` | `4.6.7` | Validation for request/response payloads and Drizzle Zod schemas. |
 | `http-status-codes` | `^2.3.0` | `2.3.0` | `StatusCodes.*` constants instead of numeric literals. |
+
+### Logging
+
+Structured logging is configured in `src/utils/logger.ts`: the `requestLogger` middleware (mounted
+right after `requestId`, so every line carries the request id as `reqId`) emits one JSON line per
+request with the request method/url, `x-*` request headers, response status, and response time; it
+logs at `error` level with the error message when the handler throws. Handlers/services log through
+the shared `logger` instance; the level comes from `LOG_LEVEL` (default `info`). Output is pretty
+printed when `NODE_ENV=development`, plain JSON lines otherwise. Sensitive headers (`cookie`,
+`authorization`) and response headers (`set-cookie`) are never logged.
+
+| Package | Declared | Resolved | Role |
+| --- | --- | --- | --- |
+| `pino` | `^10.4.0` | `10.4.0` | Structured JSON logger (`logger`, `toError` in `src/utils/logger.ts`). |
+| `hono-pino` | `^0.10.3` | `0.10.3` | `pinoLogger` request/response middleware with request-id correlation. |
+| `pino-pretty` | `^13.2.0` (dev) | `13.2.0` | Pretty output for development; mounted as a direct stream, not a pino transport. |
 
 ### Authentication
 

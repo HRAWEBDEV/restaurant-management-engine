@@ -6,6 +6,7 @@ import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { serveStatic } from "@hono/bun";
 import { apiV1Routes } from "./v1/api";
+import { logger, requestLogger, toError } from "./utils/logger";
 
 const app = new OpenAPIHono();
 let server: Server<undefined> | null = null;
@@ -17,6 +18,7 @@ if (!PORT) {
 
 // middlewares
 app.use(requestId());
+app.use(requestLogger());
 app.use(
   cors({
     origin: "http://localhost:3000",
@@ -34,7 +36,7 @@ app.route("/", apiV1Routes);
 app.use("static/*", serveStatic({ root: "./" }));
 // docs
 async function stopApp(exitCode: number = 1) {
-  console.log("Stopping app...");
+  logger.info("Stopping app...");
   try {
     if (server) {
       await server.stop();
@@ -42,7 +44,7 @@ async function stopApp(exitCode: number = 1) {
     }
     await closeConnection();
   } catch (err) {
-    console.log(`Failed to stop app: ${err}`);
+    logger.error({ err: toError(err) }, "Failed to stop app");
     process.exitCode = exitCode || 1;
     return;
   }
@@ -57,9 +59,9 @@ async function startApp() {
       port: PORT,
       hostname: "0.0.0.0",
     });
-    console.log(`App started on port: ${PORT}`);
+    logger.info({ port: PORT }, "App started");
   } catch (err) {
-    console.log(`Failed to start app:${err}`);
+    logger.error({ err: toError(err) }, "Failed to start app");
     await stopApp(1);
   }
 }

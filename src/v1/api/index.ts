@@ -8,6 +8,7 @@ import { ForbiddenError } from "../../utils/ForbiddenError";
 import { InternalError } from "../../utils/InternalError";
 import { NotFoundError } from "../../utils/NotFoundError";
 import { authRoutes } from "./routes/auth";
+import { logger } from "../../utils/logger";
 import {
   invitationsRoutes,
   organizationInvitationsRoutes,
@@ -91,7 +92,10 @@ apiV1Routes.onError((error, c) => {
     return error.handle(c);
   }
 
-  console.error("unhandled api error", error);
+  logger.error(
+    { err: error, requestId: c.get("requestId") },
+    "unhandled api error",
+  );
   return new InternalError().handle(c);
 });
 
