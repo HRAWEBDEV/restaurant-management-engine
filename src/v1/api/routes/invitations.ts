@@ -9,7 +9,10 @@ import {
 } from "../../../services/organizationInvitationsService";
 import { organizationInvitationStatusEnum } from "../../../db/schemas/organizationInvitations";
 import { type AuthContext, getContextUser } from "../../../utils/AuthContext";
-import { getContextOrganizationMember } from "../../../utils/organizationContext";
+import {
+  getContextOrganizationMember,
+  organizationIdHeaderSchema,
+} from "../../../utils/organizationContext";
 import { requireLevelPermissions } from "../../../middlewares/requireLevelPermissions";
 import { errorResponseSchema } from "../../utils/apiErrorResponse";
 
@@ -35,26 +38,11 @@ const invitationsStatusQuerySchema = z.object({
 });
 
 /**
- * Declared (not validated) so the tenant header shows up as a required
- * parameter in the OpenAPI document and Swagger UI. The header itself is
- * enforced by organizationMemberMiddleware, which runs before this
- * validation and rejects a missing or invalid header with 403.
+ * The invitee inbox is scoped to the session user across all organizations
+ * and does not use the header for anything, but clients that always send
+ * x-organization-id should see the same parameter set in the OpenAPI
+ * document.
  */
-const organizationIdHeaderSchema = z.object({
-  "x-organization-id": z.uuid().openapi({
-    description:
-      "Active organization for this request; membership and permissions are resolved from it.",
-    example: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  }),
-});
-
-/**
- * The same header, optional, for the invitee inbox: the inbox is scoped to
- * the session user across all organizations and does not use the header for
- * anything, but clients that always send x-organization-id should see the
- * same parameter set in the OpenAPI document.
- */
-
 const getMyInvitationsRoute = createRoute({
   method: "get",
   path: "/invitations",

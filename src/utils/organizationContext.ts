@@ -26,6 +26,20 @@ function getOrganizationIdHeader(
   return parsed.data;
 }
 
+/**
+ * Declared (not validated) so the tenant header shows up as a required
+ * parameter in the OpenAPI document and Swagger UI. The header itself is
+ * enforced by organizationMemberMiddleware, which runs before this
+ * validation and rejects a missing or invalid header with 403.
+ */
+const organizationIdHeaderSchema = z.object({
+  [ORGANIZATION_ID_HEADER]: z.uuid().openapi({
+    description:
+      "Active organization for this request; membership and permissions are resolved from it.",
+    example: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  }),
+});
+
 function setContextOrganizationMember(
   c: Context<{
     Variables: AuthContext;
@@ -47,6 +61,7 @@ function getContextOrganizationMember(
 
 export {
   ORGANIZATION_ID_HEADER,
+  organizationIdHeaderSchema,
   getOrganizationIdHeader,
   setContextOrganizationMember,
   getContextOrganizationMember,
