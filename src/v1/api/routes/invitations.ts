@@ -54,13 +54,6 @@ const organizationIdHeaderSchema = z.object({
  * anything, but clients that always send x-organization-id should see the
  * same parameter set in the OpenAPI document.
  */
-const optionalOrganizationIdHeaderSchema = z.object({
-  "x-organization-id": z.uuid().optional().openapi({
-    description:
-      "Not used by this endpoint; the inbox is scoped to the session user. Declared for clients that always send the header.",
-    example: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  }),
-});
 
 const getMyInvitationsRoute = createRoute({
   method: "get",
@@ -70,7 +63,6 @@ const getMyInvitationsRoute = createRoute({
   description:
     "Returns the invitations addressed to the session user's email, across all organizations, newest first, each joined with the inviting organization and the inviter's user row. Optionally narrowed by status. The user id is taken from the session, never from the request.",
   request: {
-    headers: optionalOrganizationIdHeaderSchema,
     query: invitationsStatusQuerySchema,
   },
   responses: {
