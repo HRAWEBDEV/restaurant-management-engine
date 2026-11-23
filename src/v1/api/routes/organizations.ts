@@ -12,6 +12,11 @@ import { AssetStorage } from "../../../utils/assetStorage";
 import { ForbiddenError } from "../../../utils/ForbiddenError";
 import { logger, toError } from "../../../utils/logger";
 import { NotFoundError } from "../../../utils/NotFoundError";
+import {
+  getOrganizationMembersLimitedResponseSchema,
+  getOrganizationMembersResponseSchema,
+  OrganizationMembersService,
+} from "../../../services/organizationMembersService";
 import { checkLevelPermissions } from "../../../utils/roles-permissions/checkLevelPermissions";
 import {
   getOrganizationsResponseSchema,
@@ -20,7 +25,10 @@ import {
   updateOrganizationResponseSchema,
   updateOrganizationSchema,
 } from "../../../services/organizationsService";
-import { errorResponseSchema, createErrorResponse } from "../../utils/apiErrorResponse";
+import {
+  errorResponseSchema,
+  createErrorResponse,
+} from "../../utils/apiErrorResponse";
 
 const organizationsRoutes = new OpenAPIHono<{
   Variables: AuthContext;
@@ -107,7 +115,52 @@ const getOrganizationByIdRoute = createRoute({
       },
     },
     404: {
-      description: "Organization not found, or the caller is not a member of it",
+      description:
+        "Organization not found, or the caller is not a member of it",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+const getOrganizationMembersRoute = createRoute({
+  method: "get",
+  path: "/{id}/members",
+  tags: ["organizations"],
+  summary: "List the members of an organization",
+  description:
+    "Returns the organization's memberships, oldest join first. Members get each row joined with the organization, the member's user row, and the user who added them (null when unknown); signed-in non-members get a limited view with only each member's firstName, lastName, and email. Unknown organizations are reported as not found.",
+  request: {
+    params: z.object({
+      id: z.uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description:
+        "Organization members — full membership rows for members, limited view (firstName/lastName/email) for non-members",
+      content: {
+        "application/json": {
+          schema: z.union([
+            getOrganizationMembersResponseSchema,
+            getOrganizationMembersLimitedResponseSchema,
+          ]),
+        },
+      },
+    },
+    404: {
+      description: "Organization not found",
       content: {
         "application/json": {
           schema: errorResponseSchema,
@@ -172,7 +225,8 @@ const updateOrganizationRoute = createRoute({
       },
     },
     404: {
-      description: "Organization not found, or the caller is not a member of it",
+      description:
+        "Organization not found, or the caller is not a member of it",
       content: {
         "application/json": {
           schema: errorResponseSchema,
@@ -194,7 +248,8 @@ const updateOrganizationLogoRoute = createRoute({
   method: "put",
   path: "/{id}/logo",
   tags: ["organizations"],
-  summary: "Update the logo of an organization the signed in user is a member of",
+  summary:
+    "Update the logo of an organization the signed in user is a member of",
   description:
     "Accepts a multipart form with an image file (png, jpeg, or webp, up to 2 MB), stores it under static/organizations/logos, updates the organization's logo, and deletes the replaced logo file. Requests outside the caller's memberships are reported as not found; members whose role does not grant organization:update are rejected as forbidden.",
   request: {
@@ -237,7 +292,8 @@ const updateOrganizationLogoRoute = createRoute({
       },
     },
     404: {
-      description: "Organization not found, or the caller is not a member of it",
+      description:
+        "Organization not found, or the caller is not a member of it",
       content: {
         "application/json": {
           schema: errorResponseSchema,
@@ -319,16 +375,64 @@ organizationsRoutes.openapi(getOrganizationByIdRoute, async (c) => {
   return c.json(result, StatusCodes.OK);
 });
 
+organizationsRoutes.openapi(getOrganizationMembersRoute, async (c) => {
+  const user = getContextUser(c);
+  const { id } = c.req.valid("param");
+
+  const organizationsService = new OrganizationsService(db);
+  const { organization } = await organizationsService.getOrganizationById({
+    id,
+    userId: user.id,
+  });
+
+  const membersService = new OrganizationMembersService(db);
+
+  // The membership lookup inner-joins the caller's membership row, so a null
+  // result means "missing organization" or "not a member"; the existence
+  // check tells them apart (404 vs limited view).
+  if (!organization) {
+    const exists = await organizationsService.organizationExists({ id });
+
+    if (!exists) {
+      throw new NotFoundError("organization not found");
+    }
+
+    const { members } = await membersService.getOrganizationMembers({
+      filters: { organizationId: id },
+    });
+
+    return c.json(
+      {
+        members: members.map(({ user: memberUser }) => ({
+          user: {
+            firstName: memberUser.firstName,
+            lastName: memberUser.lastName,
+            email: memberUser.email,
+          },
+        })),
+      },
+      StatusCodes.OK,
+    );
+  }
+
+  const { members } = await membersService.getOrganizationMembers({
+    filters: { organizationId: id },
+  });
+
+  return c.json({ members }, StatusCodes.OK);
+});
+
 organizationsRoutes.openapi(updateOrganizationRoute, async (c) => {
   const user = getContextUser(c);
   const { id } = c.req.valid("param");
   const body = c.req.valid("json");
 
-  const { organization, membership } = await new OrganizationsService(db)
-    .getOrganizationById({
-      id,
-      userId: user.id,
-    });
+  const { organization, membership } = await new OrganizationsService(
+    db,
+  ).getOrganizationById({
+    id,
+    userId: user.id,
+  });
 
   if (!organization || !membership) {
     throw new NotFoundError("organization not found");
@@ -346,12 +450,13 @@ organizationsRoutes.openapi(updateOrganizationRoute, async (c) => {
     );
   }
 
-  const { organization: updatedOrganization } =
-    await new OrganizationsService(db).updateOrganization({
-      id,
-      userId: user.id,
-      ...body,
-    });
+  const { organization: updatedOrganization } = await new OrganizationsService(
+    db,
+  ).updateOrganization({
+    id,
+    userId: user.id,
+    ...body,
+  });
 
   if (!updatedOrganization) {
     throw new NotFoundError("organization not found");
@@ -370,8 +475,8 @@ organizationsRoutes.openapi(updateOrganizationLogoRoute, async (c) => {
   // Fetched up front so the caller gets the previous logo to clean up, the
   // membership role is available for the permission check, and a
   // missing/non-member organization fails before a file is written.
-  const { organization: existing, membership } = await service
-    .getOrganizationById({
+  const { organization: existing, membership } =
+    await service.getOrganizationById({
       id,
       userId: user.id,
     });

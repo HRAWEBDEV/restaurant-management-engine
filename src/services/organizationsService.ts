@@ -187,6 +187,22 @@ class OrganizationsService {
   }
 
   /**
+   * Returns whether an organization with the given id exists, without any
+   * membership scoping. `getOrganizationById` inner-joins the caller's
+   * membership row, so it cannot distinguish a missing organization from a
+   * caller who is not a member; this check tells them apart.
+   */
+  async organizationExists(props: { id: string }): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.id, props.id))
+      .limit(1);
+
+    return row !== undefined;
+  }
+
+  /**
    * Creates an organization and its first membership in a single transaction,
    * making `userId` the organization owner.
    *

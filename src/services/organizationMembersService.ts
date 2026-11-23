@@ -42,6 +42,27 @@ const getOrganizationMembersResponseSchema = z.object({
   members: z.array(organizationMemberWithRelationsSchema),
 });
 
+/**
+ * Limited member view for signed-in callers who are not members of the
+ * organization: per member, only the display fields — no ids, roles, or
+ * membership metadata.
+ */
+const getOrganizationMembersLimitedResponseSchema = z.object({
+  members: z.array(
+    z.object({
+      user: selectUserSchema.pick({
+        firstName: true,
+        lastName: true,
+        email: true,
+      }),
+    }),
+  ),
+});
+
+type GetOrganizationMembersLimitedResponse = z.infer<
+  typeof getOrganizationMembersLimitedResponseSchema
+>;
+
 const addedByUser = alias(user, "added_by_user");
 
 type GetOrganizationMembersResponse = z.infer<
@@ -193,6 +214,7 @@ export type {
   GetOrganizationMembersFilters,
   GetOrganizationMembersProps,
   GetOrganizationMembersResponse,
+  GetOrganizationMembersLimitedResponse,
   UpdateOrganizationRoleProps,
   UpdateOrganizationRoleResponse,
   AddOrganizationMemberProps,
@@ -202,6 +224,7 @@ export {
   getOrganizationMembersFiltersSchema,
   organizationMemberWithRelationsSchema,
   getOrganizationMembersResponseSchema,
+  getOrganizationMembersLimitedResponseSchema,
   updateOrganizationRoleSchema,
   updateOrganizationRoleResponseSchema,
   addOrganizationMemberSchema,

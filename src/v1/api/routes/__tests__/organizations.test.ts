@@ -221,6 +221,108 @@ describe("GET /organizations/{id}", () => {
   });
 });
 
+describe("GET /organizations/{id}/members", () => {
+  it("lists the organization's members with their user rows, oldest join first", async () => {
+    const userA = await signUp();
+    const userB = await signUp();
+    const { organization } = await createOrganization(userA.cookie);
+    await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: userB.userId,
+      role: "member",
+      addedBy: userA.userId,
+    });
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members`,
+      { headers: { cookie: userA.cookie } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{
+      members: Array<{
+        member: { userId: string; role: string };
+        organization: { id: string };
+        user: { id: string; email: string };
+        addedByUser: { id: string } | null;
+      }>;
+    }>(response);
+    expect(body.members).toHaveLength(2);
+    expect(body.members[0]?.member.role).toBe("owner");
+    expect(body.members[0]?.user.id).toBe(userA.userId);
+    expect(body.members[0]?.addedByUser?.id).toBe(userA.userId);
+    expect(body.members[1]?.member.role).toBe("member");
+    expect(body.members[1]?.user.id).toBe(userB.userId);
+    expect(body.members[1]?.member.userId).toBe(userB.userId);
+    expect(body.members[1]?.organization.id).toBe(organization.id);
+    expect(body.members[1]?.addedByUser?.id).toBe(userA.userId);
+  });
+
+  it("returns a limited member view to signed-in non-members", async () => {
+    const userA = await signUp();
+    const userB = await signUp();
+    const nonMember = await signUp();
+    const { organization } = await createOrganization(userA.cookie);
+    await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: userB.userId,
+      role: "member",
+      addedBy: userA.userId,
+    });
+
+    const response = await app.request(
+      `/api/v1/organizations/${organization.id}/members`,
+      { headers: { cookie: nonMember.cookie } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await jsonBody<{
+      members: Array<{ user: Record<string, unknown> } & Record<string, unknown>>;
+    }>(response);
+    expect(body.members).toHaveLength(2);
+
+    for (const member of body.members) {
+      // Limited view: only the display fields, no membership metadata or ids.
+      expect(Object.keys(member)).toEqual(["user"]);
+      expect(Object.keys(member.user).sort()).toEqual([
+        "email",
+        "firstName",
+        "lastName",
+      ]);
+    }
+
+    const owner = body.members[0]?.user as {
+      firstName: string;
+      lastName: string;
+      email: string;
+    };
+    expect(owner.firstName).toBe("Test");
+    expect(owner.lastName).toBe("User");
+    expect(owner.email).toBe(userA.credentials.email);
+  });
+
+  it("reports an unknown organization as 404", async () => {
+    const { cookie } = await signUp();
+
+    const response = await app.request(
+      "/api/v1/organizations/11111111-1111-4111-8111-111111111111/members",
+      { headers: { cookie } },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects member requests without a session with 401", async () => {
+    const response = await app.request(
+      "/api/v1/organizations/00000000-0000-4000-8000-000000000000/members",
+    );
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ code?: string }>(response);
+    expect(body.code).toBe("NOT_SIGNED_IN");
+  });
+});
+
 describe("PATCH /organizations/{id}", () => {
   it("updates the organization and regenerates the slug on a name change", async () => {
     const { cookie } = await signUp();
