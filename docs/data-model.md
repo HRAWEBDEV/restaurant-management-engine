@@ -236,6 +236,30 @@ list; a stale/mismatched list → `ConflictError`). Every mutation writes its
 `organizationWorkspace` level (`catalog:read`, `catalog:category:create` / `:update` /
 `:delete`).
 
+### `tax_classes` — `taxClasses.ts`
+
+Phase 1 catalog ([`docs/plan/01-catalog.md`](plan/01-catalog.md)). A tax class is a named
+sales-tax rate ("VAT 8.25%") applied to menu items; `menu_items.tax_class_id` will be nullable
+and fall back to the workspace's default class when null (still to land).
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` PK default random | |
+| `workspace_id` | `uuid` not null → `workspaces.id` | `ON DELETE CASCADE`; plain single-column FK — the workspace already pins the organization, so no composite tenant key is needed |
+| `name` | `varchar(100)` not null | |
+| `rate` | `integer` not null | Basis points (e.g. `825` = 8.25%); no decimal math, matching the minor-units money convention |
+| `is_default` | `boolean` not null default `false` | Workspace-wide fallback for items without an explicit tax class |
+| `created_at` / `updated_at` | `timestamptz` not null | `trackChanges` |
+
+Unique: `(workspace_id, name)` — one tax class name per workspace (case-sensitive); the unique
+index also serves lookups by `workspace_id` alone. Additionally a partial unique index
+`tax_classes_workspace_default_unique` on `workspace_id WHERE is_default = true` enforces at
+most one default class per workspace at the database level. `insertTaxClassSchema` omits
+`workspaceId` (resolved from the `x-workspace-id` header, never client input) along with
+`id` / `createdAt` / `updatedAt`; `updateTaxClassSchema` picks `{ name, rate, isDefault }` —
+default-flag transitions (swapping which class is default, reassigning after deleting the
+default) are service responsibilities, since the DB only caps the count.
+
 ## Relationship summary
 
 | Relationship | Cardinality | Delete behavior |
@@ -249,6 +273,7 @@ list; a stale/mismatched list → `ConflictError`). Every mutation writes its
 | `organization_members` → `workspace_members` | 1:N | cascade (composite with `organization_id`) |
 | `workspaces` → `workspace_members` | 1:N | cascade (composite with `organization_id`) |
 | `workspaces` → `catalog_categories` | 1:N | cascade |
+| `workspaces` → `tax_classes` | 1:N | cascade |
 | `organizations` → `activity_logs` | 1:N | cascade |
 | `workspaces` → `activity_logs` | 1:N | set null |
 | `user` → `activity_logs` (as actor) | 1:N | set null |
@@ -481,7 +506,9 @@ Enforced by the database today:
   `added_by` / `created_by` / `actor_user_id` become `NULL`.
 - Activity rows are append-only (no unique constraints to violate, no updates).
 - Category names are unique per workspace (`catalog_categories (workspace_id, name)`,
-  case-sensitive).
+  case-sensitive); the same holds for tax class names (`tax_classes (workspace_id, name)`).
+- At most one default tax class per workspace
+  (`tax_classes_workspace_default_unique` on `workspace_id WHERE is_default = true`).
 
 Expected but **not** enforced:
 
@@ -512,8 +539,9 @@ convention, not debt to pay down.
    `use(...)` lines); the workspace-scoped catalog category routes are the first consumers of
    `workspaceRoleMiddleware`, mounted after the second `use(...)` line per the plan's mount
    policy (`docs/plan/00-foundations.md`).
-4. **Operational data is only starting to land.** `catalog_categories` is the first
-   workspace-scoped domain table, served by `CatalogCategoriesService` and mounted at
-   `/api/v1/workspace/catalog/categories...`. The remaining Phase 1 catalog tables and later
-   domains (floor, orders, kitchen, inventory) carry a `workspace_id` FK as each phase lands
-   (`docs/plan/`).
+4. **Operational data is only starting to land.** `catalog_categories` and `tax_classes` are
+   the first workspace-scoped domain tables (categories served by `CatalogCategoriesService`
+   and mounted at `/api/v1/workspace/catalog/categories...`; tax classes have their schema and
+   migration only — service and routes are still to land). The remaining Phase 1 catalog
+   tables and later domains (floor, orders, kitchen, inventory) carry a `workspace_id` FK as
+   each phase lands (`docs/plan/`).
