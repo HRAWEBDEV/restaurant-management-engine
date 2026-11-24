@@ -14,11 +14,8 @@ import {
 import { type AuthContext, getContextUser } from "../../../utils/AuthContext";
 import { requireLevelPermissions } from "../../../middlewares/requireLevelPermissions";
 import { NotFoundError } from "../../../utils/NotFoundError";
-import { organizationIdHeaderSchema } from "../../../utils/organizationContext";
-import {
-  getWorkspaceIdHeader,
-  workspaceIdHeaderSchema,
-} from "../../../utils/workspaceContext";
+import { tenantHeadersSchema } from "../../../utils/tenantContext";
+import { getWorkspaceIdHeader } from "../../../utils/workspaceContext";
 import { errorResponseSchema } from "../../utils/apiErrorResponse";
 
 /**
@@ -37,14 +34,6 @@ const catalogCategoriesRoutes = new OpenAPIHono<{
   Variables: AuthContext;
 }>();
 
-/**
- * Declared (not validated) so both required tenant headers show up as
- * parameters in the OpenAPI document; the middlewares enforce them first.
- */
-const catalogTenantHeadersSchema = organizationIdHeaderSchema.extend(
-  workspaceIdHeaderSchema.shape,
-);
-
 const getCategoriesRoute = createRoute({
   method: "get",
   path: "/workspace/catalog/categories",
@@ -59,7 +48,7 @@ const getCategoriesRoute = createRoute({
   description:
     "Returns every category of the workspace named by the x-workspace-id header in position order (oldest created breaks ties), archived ones included — this is the back-office read, availability filtering happens in the composite menu read. Requires membership of the workspace's organization and catalog:read.",
   request: {
-    headers: catalogTenantHeadersSchema,
+    headers: tenantHeadersSchema,
   },
   responses: {
     200: {
@@ -104,7 +93,7 @@ const createCategoryRoute = createRoute({
   description:
     "Creates a category in the workspace named by the x-workspace-id header, appended to the end of the current order (max position + 1). The actor is taken from the session and a catalog_category.created audit row is written on the same transaction. Requires catalog:category:create; a name already used in the workspace is rejected as a conflict.",
   request: {
-    headers: catalogTenantHeadersSchema,
+    headers: tenantHeadersSchema,
     body: {
       required: true,
       content: {
@@ -181,7 +170,7 @@ const reorderCategoriesRoute = createRoute({
   description:
     "Rewrites category positions from a full ordered id list — the client sends every category id of the workspace exactly once, in display order, and positions become 0..n-1. A list that does not match the workspace's current categories (stale view, foreign id, duplicate) is rejected as a conflict, so a reorder never silently drops or resurrects rows. Requires catalog:category:update; one catalog_category.updated audit row is written per moved category on the same transaction.",
   request: {
-    headers: catalogTenantHeadersSchema,
+    headers: tenantHeadersSchema,
     body: {
       required: true,
       content: {
@@ -250,7 +239,7 @@ const updateCategoryRoute = createRoute({
   description:
     "Updates a category's name, description, and/or active flag. A no-change request returns the current row without writing an audit row. Requires catalog:category:update; a catalog_category.updated audit row with the field-level diff is written on the same transaction. A category of another workspace is indistinguishable from a missing one and reported as not found; a name already used in the workspace is rejected as a conflict.",
   request: {
-    headers: catalogTenantHeadersSchema,
+    headers: tenantHeadersSchema,
     params: z.object({
       categoryId: z.uuid(),
     }),
@@ -331,7 +320,7 @@ const archiveCategoryRoute = createRoute({
   description:
     "Archives the category (is_active = false) instead of deleting it, so rows stay referenceable by menu items and future orders; archiving an already archived category returns the current row without writing an audit row. Requires catalog:category:delete; a catalog_category.archived audit row is written on the same transaction. A category of another workspace is indistinguishable from a missing one and reported as not found.",
   request: {
-    headers: catalogTenantHeadersSchema,
+    headers: tenantHeadersSchema,
     params: z.object({
       categoryId: z.uuid(),
     }),
