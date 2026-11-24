@@ -1,6 +1,7 @@
 # Phase 1 — Catalog (Menu & Items)
 
-Status: **planned** · Depends on: Phase 0 · Milestone: **M2 — menu managed**
+Status: **in progress** (categories schema + migration shipped; Phase 0 groundwork still
+pending) · Depends on: Phase 0 · Milestone: **M2 — menu managed**
 
 ## Goal
 

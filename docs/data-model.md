@@ -4,9 +4,9 @@ How identity, tenancy, membership, and audit are modelled.
 
 Authentication is owned by **Better Auth** (`auth-schema.ts`, generated — never hand-edit;
 regenerate with `bun run auth:generate`). Everything above identity — organizations, invitations,
-workspaces, memberships, and activity logs — is owned by the application and lives in
-`src/db/schemas/`. Both sets of tables share one database and one Drizzle migration pipeline
-(`drizzle.config.ts` reads `./src/db/schemas` and `./auth-schema.ts`).
+workspaces, memberships, activity logs, and the first catalog table — is owned by the application
+and lives in `src/db/schemas/`. Both sets of tables share one database and one Drizzle migration
+pipeline (`drizzle.config.ts` reads `./src/db/schemas` and `./auth-schema.ts`).
 
 ## Mental model
 
@@ -205,6 +205,29 @@ Indexes: `(organization_id, id desc)`, `(workspace_id, id desc)`,
 Rows are written via `ActivityLogger` (see [Audit](#audit) below), constructed with the same
 executor as the mutation so the audit row commits or rolls back with it.
 
+### `catalog_categories` — `catalogCategories.ts`
+
+The first workspace-scoped operational table (Phase 1 catalog,
+[`docs/plan/01-catalog.md`](plan/01-catalog.md)). A category is a menu grouping
+("Starters", "Drinks"); menu items will reference it (nullable FK, still to land).
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` PK default random | |
+| `workspace_id` | `uuid` not null → `workspaces.id` | `ON DELETE CASCADE`; plain single-column FK — the workspace already pins the organization, so no composite tenant key is needed |
+| `name` | `varchar(100)` not null | |
+| `description` | `text` | |
+| `position` | `integer` not null default `0` | Sort order within the workspace; rewritten wholesale by the planned reorder endpoint |
+| `is_active` | `boolean` not null default `true` | Archive flag — deletion is archive (`is_active = false`), not row removal, once referenced |
+| `created_at` / `updated_at` | `timestamptz` not null | `trackChanges` |
+
+Unique: `(workspace_id, name)` — one category name per workspace (case-sensitive); the unique
+index also serves lookups by `workspace_id` alone. `insertCatalogCategorySchema` omits
+`workspaceId` (resolved from the `x-workspace-id` header, never client input) along with
+`id` / `createdAt` / `updatedAt`; `updateCatalogCategorySchema` picks
+`{ name, description, isActive }` — `position` is managed by the reorder endpoint, not item
+updates. Schema only so far: no service or routes exist yet (Phase 1 in progress).
+
 ## Relationship summary
 
 | Relationship | Cardinality | Delete behavior |
@@ -217,6 +240,7 @@ executor as the mutation so the audit row commits or rolls back with it.
 | `organizations` → `workspaces` | 1:N | cascade |
 | `organization_members` → `workspace_members` | 1:N | cascade (composite with `organization_id`) |
 | `workspaces` → `workspace_members` | 1:N | cascade (composite with `organization_id`) |
+| `workspaces` → `catalog_categories` | 1:N | cascade |
 | `organizations` → `activity_logs` | 1:N | cascade |
 | `workspaces` → `activity_logs` | 1:N | set null |
 | `user` → `activity_logs` (as actor) | 1:N | set null |
@@ -438,6 +462,8 @@ Enforced by the database today:
 - Deleting an organization/workspace/member cleans up dependents by cascade; user references in
   `added_by` / `created_by` / `actor_user_id` become `NULL`.
 - Activity rows are append-only (no unique constraints to violate, no updates).
+- Category names are unique per workspace (`catalog_categories (workspace_id, name)`,
+  case-sensitive).
 
 Expected but **not** enforced:
 
@@ -468,6 +494,7 @@ convention, not debt to pay down.
    `use(...)` lines); no route requires a workspace role yet. Workspace-scoped domains mount
    after `use(workspaceRoleMiddleware)` per the plan's mount policy
    (`docs/plan/00-foundations.md`).
-4. **Operational data is not attached yet.** No table references `workspace_id` (except
-   `activity_logs`). Catalog/floor/orders/etc. carry a `workspace_id` FK as each phase lands
-   (`docs/plan/`).
+4. **Operational data is only starting to land.** `catalog_categories` is the first
+   workspace-scoped domain table (schema + migration only; no service/routes yet). The
+   remaining Phase 1 catalog tables and later domains (floor, orders, kitchen, inventory)
+   carry a `workspace_id` FK as each phase lands (`docs/plan/`).
