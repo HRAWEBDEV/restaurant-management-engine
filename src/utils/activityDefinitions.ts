@@ -1,3 +1,4 @@
+import type { TaxClass } from "../db/schemas/taxClasses";
 import type { CatalogCategory } from "../db/schemas/catalogCategories";
 import type { OrganizationInvitation } from "../db/schemas/organizationInvitations";
 import type { OrganizationMember } from "../db/schemas/organizationMembers";
@@ -117,6 +118,24 @@ const catalogCategoryActivity = defineActivity<CatalogCategory>()({
 type CatalogCategoryActivityAction =
   (typeof catalogCategoryActivity)["actions"][number];
 
+/**
+ * Audit definition for tax classes. Tax classes are hard-deleted (they carry
+ * no archive flag), so the verb is `deleted`; the promoted default after a
+ * default's deletion lands as an `updated` row on the promoted class.
+ */
+const taxClassActivity = defineActivity<TaxClass>()({
+  entityType: "tax_class",
+  actions: ["created", "updated", "deleted"],
+  diff: ["name", "rate", "isDefault"],
+  summarize: ({ action, actor, before, after }) => {
+    const name = after?.name ?? before?.name;
+
+    return `${actor} ${action} tax class${name ? ` "${name}"` : ""}`;
+  },
+});
+
+type TaxClassActivityAction = (typeof taxClassActivity)["actions"][number];
+
 export type {
   WorkspaceActivityAction,
   OrganizationActivityAction,
@@ -124,6 +143,7 @@ export type {
   OrganizationMemberActivityAction,
   WorkspaceMemberActivityAction,
   CatalogCategoryActivityAction,
+  TaxClassActivityAction,
 };
 export {
   workspaceActivity,
@@ -132,4 +152,5 @@ export {
   organizationMemberActivity,
   workspaceMemberActivity,
   catalogCategoryActivity,
+  taxClassActivity,
 };
