@@ -13,6 +13,7 @@ import {
   invitationsRoutes,
   organizationInvitationsRoutes,
 } from "./routes/invitations";
+import { catalogCategoriesRoutes } from "./routes/catalogCategories";
 import { organizationsRoutes } from "./routes/organizations";
 import { usersRoutes } from "./routes/users";
 import { workspacesRoutes } from "./routes/workspaces";
@@ -75,6 +76,11 @@ apiV1Routes.use(organizationMemberMiddleware);
 apiV1Routes.route("/", organizationInvitationsRoutes);
 
 apiV1Routes.use(workspaceRoleMiddleware);
+
+// workspace-scoped catalog routes: the workspace is addressed only by the
+// x-workspace-id header (no path param, so the header is the single source of
+// truth) and requireLevelPermissions enforces the catalog grants.
+apiV1Routes.route("/", catalogCategoriesRoutes);
 
 // global error handling, keep this after all routes
 apiV1Routes.notFound((c) => new NotFoundError().handle(c));

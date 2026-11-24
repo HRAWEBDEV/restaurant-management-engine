@@ -53,8 +53,9 @@ request.
 ### Router order (`src/v1/api/index.ts`)
 
 Public routes → `/doc` → auth routes → `use(authMiddleware)` → protected routes →
-`use(organizationMemberMiddleware)` / `use(workspaceRoleMiddleware)` (for future mounts) →
-`notFound`/`onError`. A mount only sees middlewares registered before it.
+`use(organizationMemberMiddleware)` → organization-scoped invitation routes →
+`use(workspaceRoleMiddleware)` → workspace-scoped catalog routes → `notFound`/`onError`.
+A mount only sees middlewares registered before it.
 
 ## Endpoint catalog
 
@@ -97,7 +98,7 @@ Public routes → `/doc` → auth routes → `use(authMiddleware)` → protected
 | POST | `/organization/invitations` | Create a pending invitation `{ invitedUserEmail }` for the active organization (`x-organization-id`); email normalized lowercase, server-set 7-day expiry, inviter from the session. Permission `organization:member:invite`; 403 when not a member or not permitted; 409 when the email is already a member or an invitation is already pending. |
 | POST | `/organization/invitations/{invitationId}/revoke` | Revoke a pending invitation of the active organization → 200 `{ invitation }` with status `revoked` (rows are kept as history); frees the invitee's email for a new pending invitation. Revoker from the session. Permission `organization:invitation:revoke`; 403 when not a member or not permitted; 404 when no such invitation in the organization; 409 when it is not pending (including lazily expired). |
 
-### Tenant middlewares (partial)
+### Tenant middlewares
 
 `organizationMemberMiddleware` and `workspaceRoleMiddleware` are registered after the current
 domain mounts. The organization-scoped invitation routes are mounted between the two
@@ -106,7 +107,25 @@ on the context (`userOrganizationMember`), and enforce permissions with
 `requireLevelPermissions` declared per route. Modules mounted after the second `use(...)` line
 additionally require the `x-workspace-id` header and receive the workspace role context
 (`userWorkspaceMemberRole`); `getContextWorkspaceRole` returns `undefined` when that middleware
-has not run, so organization-level checks stay usable without it.
+has not run, so organization-level checks stay usable without it. The catalog category routes
+are the first such mount.
+
+### Workspace-scoped (after both tenant middlewares)
+
+Both tenant headers are required — `organizationMemberMiddleware` resolves the organization
+membership and `workspaceRoleMiddleware` the effective workspace role before the handler runs.
+The workspace is addressed only through the `x-workspace-id` header — no path param, so the
+header is the single source of truth. Permissions are enforced per route with
+`requireLevelPermissions` at `organizationWorkspace` level: organization owners (implicit
+workspace `admin`) and workspace `admin`s pass; workspace `member`s get 403 until granted.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/workspace/catalog/categories` | The active workspace's menu categories, position ordered, archived included (back-office read). Permission `catalog:read`. |
+| POST | `/workspace/catalog/categories` | Create a category, appended at max position + 1 → 201 `{ category }`; writes a `catalog_category.created` audit row. Permission `catalog:category:create`; 409 when the name is already used in the workspace. |
+| PATCH | `/workspace/catalog/categories/reorder` | Rewrite positions from a full ordered id list (`{ categoryIds }`) → 200 `{ categories }` in the new order; one `catalog_category.updated` audit row per moved category. Permission `catalog:category:update`; 409 when the list does not match the workspace's categories. |
+| PATCH | `/workspace/catalog/categories/{categoryId}` | Update name/description/isActive → 200 `{ category }`; no-change returns the current row without an audit row, otherwise writes a `catalog_category.updated` audit row with the field diff. Permission `catalog:category:update`; 404 when the category is not in this workspace; 409 when renaming to a used name. |
+| DELETE | `/workspace/catalog/categories/{categoryId}` | Archive the category (`is_active = false`, rows are kept referenceable) → 200 `{ category }`; idempotent; writes a `catalog_category.archived` audit row on the first archive. Permission `catalog:category:delete`; 404 when the category is not in this workspace. |
 
 ## Testing endpoints
 

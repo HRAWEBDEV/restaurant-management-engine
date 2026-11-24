@@ -231,7 +231,10 @@ updates. Served by `CatalogCategoriesService` (`src/services/catalogCategoriesSe
 (appends at max position + 1, name conflict → `ConflictError`), `updateCategory`,
 `archiveCategory` (delete = archive; idempotent), and `reorderCategories` (full ordered id
 list; a stale/mismatched list → `ConflictError`). Every mutation writes its
-`catalog_category` audit row on the same transaction. Routes are not mounted yet.
+`catalog_category` audit row on the same transaction. Mounted at
+`/api/v1/workspace/catalog/categories...` (header-addressed workspace), permission-checked at
+`organizationWorkspace` level (`catalog:read`, `catalog:category:create` / `:update` /
+`:delete`).
 
 ## Relationship summary
 
@@ -297,6 +300,12 @@ Enforcement status:
 - `PATCH|DELETE /workspaces/{id}/members/{memberId}` enforce `workspace:member:update` /
   `workspace:member:remove` at `organizationWorkspace` level; callers cannot target their own
   membership (403 otherwise).
+- The workspace-scoped catalog category routes (`GET|POST /workspace/catalog/categories`,
+  `PATCH /workspace/catalog/categories/reorder`,
+  `PATCH|DELETE /workspace/catalog/categories/{categoryId}`) enforce `catalog:read` /
+  `catalog:category:create` / `catalog:category:update` / `catalog:category:delete` at
+  `organizationWorkspace` level — the first routes mounted after `workspaceRoleMiddleware`,
+  addressed only through the `x-workspace-id` header.
 - The organization member routes are guarded by ownership rather than permission strings:
   `PATCH|DELETE /organizations/{id}/members/{memberId}` are owner-only and refuse self
   role-change/self-removal; `GET /organizations/{id}/members` is readable by members, with
@@ -498,12 +507,13 @@ convention, not debt to pay down.
    `organization_invitations (invited_by)`, `workspaces (organization_id)`,
    `workspace_members (workspace_id)`, `workspace_members (organization_id)` — planned as
    Phase 0 work.
-3. **`workspaceRoleMiddleware` has no consumers yet.** `organizationMemberMiddleware` is
+3. **`workspaceRoleMiddleware` consumers are arriving.** `organizationMemberMiddleware` is
    consumed by the organization-scoped invitation routes (mounted between the two
-   `use(...)` lines); no route requires a workspace role yet. Workspace-scoped domains mount
-   after `use(workspaceRoleMiddleware)` per the plan's mount policy
-   (`docs/plan/00-foundations.md`).
+   `use(...)` lines); the workspace-scoped catalog category routes are the first consumers of
+   `workspaceRoleMiddleware`, mounted after the second `use(...)` line per the plan's mount
+   policy (`docs/plan/00-foundations.md`).
 4. **Operational data is only starting to land.** `catalog_categories` is the first
-   workspace-scoped domain table, served by `CatalogCategoriesService` (routes not mounted
-   yet). The remaining Phase 1 catalog tables and later domains (floor, orders, kitchen,
-   inventory) carry a `workspace_id` FK as each phase lands (`docs/plan/`).
+   workspace-scoped domain table, served by `CatalogCategoriesService` and mounted at
+   `/api/v1/workspace/catalog/categories...`. The remaining Phase 1 catalog tables and later
+   domains (floor, orders, kitchen, inventory) carry a `workspace_id` FK as each phase lands
+   (`docs/plan/`).

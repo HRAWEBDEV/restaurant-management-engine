@@ -13,6 +13,20 @@ const workspaceIdSchema = z.uuid();
 
 type WorkspaceRole = (typeof workspaceRoles)[number];
 
+/**
+ * Declared (not validated) so the tenant header shows up as a required
+ * parameter in the OpenAPI document and Swagger UI. The header itself is
+ * enforced by workspaceRoleMiddleware, which runs before this validation and
+ * rejects a missing or invalid header with 403.
+ */
+const workspaceIdHeaderSchema = z.object({
+  [WORKSPACE_ID_HEADER]: z.uuid().openapi({
+    description:
+      "Active workspace for this request; membership and permissions are resolved from it.",
+    example: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  }),
+});
+
 function getWorkspaceIdHeader(
   c: Context<{
     Variables: AuthContext;
@@ -54,6 +68,7 @@ function getContextWorkspaceRole(
 
 export {
   WORKSPACE_ID_HEADER,
+  workspaceIdHeaderSchema,
   getWorkspaceIdHeader,
   setContextWorkspaceRole,
   getContextWorkspaceRole,
