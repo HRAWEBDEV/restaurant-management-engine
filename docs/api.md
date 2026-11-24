@@ -85,6 +85,7 @@ Public routes → `/doc` → auth routes → `use(authMiddleware)` → protected
 | PATCH | `/users/info` | Update name/firstName/lastName/username/image; username uniqueness → 409. |
 | PUT | `/users/image` | Multipart image (png/jpeg/webp ≤ 2 MB); replaces and deletes the previous image file. |
 | GET | `/workspaces` | Workspaces reachable through the caller's organization memberships, newest first, each joined with its organization and membership row. |
+| POST | `/workspaces` | Create a workspace in the body's organization (server-generated slug; creator becomes its workspace admin); requires `workspace:create` at organization level from the caller's membership row; 404 when the organization is unknown or not the caller's, writes a `workspace.created` audit row. |
 | GET | `/workspaces/{id}` | Workspace + its organization + the caller's organization membership row + workspace membership row (null when not a workspace member); 404 when not an organization member. |
 | PATCH | `/workspaces/{id}` | Update name/description; requires `workspace:update` checked at `organizationWorkspace` level (org owner or workspace admin); name change regenerates the slug. |
 | GET | `/workspaces/{id}/members` | The workspace's memberships, oldest join first, each joined with the workspace, its organization, the member's user row (through the underlying organization membership), and the user who added them (`addedByUser`, null when unknown); 404 when the workspace is unknown or outside the caller's organizations. |

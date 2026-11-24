@@ -9,6 +9,8 @@ import {
 import type { WorkspaceMember } from "../../../db/schemas/workspaceMembers";
 import { WorkspaceMembersService, getWorkspaceMembersResponseSchema } from "../../../services/workspaceMembersService";
 import {
+  createWorkspaceResponseSchema,
+  createWorkspaceSchema,
   getWorkspacesResponseSchema,
   getWorkspaceWithMembershipResponseSchema,
   updateWorkspaceResponseSchema,
@@ -19,6 +21,7 @@ import { type AuthContext, getContextUser } from "../../../utils/AuthContext";
 import { ForbiddenError } from "../../../utils/ForbiddenError";
 import { NotFoundError } from "../../../utils/NotFoundError";
 import { checkLevelPermissions } from "../../../utils/roles-permissions/checkLevelPermissions";
+import { OrganizationsService } from "../../../services/organizationsService";
 import { errorResponseSchema } from "../../utils/apiErrorResponse";
 
 const workspacesRoutes = new OpenAPIHono<{
@@ -55,6 +58,70 @@ const getWorkspacesRoute = createRoute({
       content: {
         "application/json": {
           schema: getWorkspacesResponseSchema,
+        },
+      },
+    },
+    401: {
+      description: "Not signed in",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+const createWorkspaceRoute = createRoute({
+  method: "post",
+  path: "/",
+  tags: ["workspaces"],
+  summary:
+    "Create a workspace in an organization the signed in user is a member of",
+  description:
+    "Creates a workspace inside the given organization with a server-generated slug and adds the creator as its workspace admin with a workspace.membership row and a workspace.created audit row. Requests outside the caller's organization memberships are reported as not found; callers whose organization role does not grant workspace:create are rejected as forbidden.",
+  request: {
+    body: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: createWorkspaceSchema,
+        },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: "Workspace created",
+      content: {
+        "application/json": {
+          schema: createWorkspaceResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: "Invalid input",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    403: {
+      description:
+        "The caller is a member but their organization role does not grant workspace:create",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description:
+        "Organization not found, or the caller is not a member of it",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
         },
       },
     },
@@ -348,6 +415,49 @@ workspacesRoutes.openapi(getWorkspacesRoute, async (c) => {
   });
 
   return c.json({ workspaces }, StatusCodes.OK);
+});
+
+workspacesRoutes.openapi(createWorkspaceRoute, async (c) => {
+  const user = getContextUser(c);
+  const body = c.req.valid("json");
+
+  // The role comes from the caller's organization membership row, never from
+  // the request; a missing/non-member organization fails before any write.
+  const { organization, membership } = await new OrganizationsService(
+    db,
+  ).getOrganizationById({
+    id: body.organizationId,
+    userId: user.id,
+  });
+
+  if (!organization || !membership) {
+    throw new NotFoundError("organization not found");
+  }
+
+  const allowed = checkLevelPermissions({
+    level: "organization",
+    permission: "workspace:create",
+    organizationRole: membership.role,
+  });
+
+  if (!allowed) {
+    throw new ForbiddenError(
+      "you do not have permission to create workspaces in this organization",
+    );
+  }
+
+  const { workspace } = await new WorkspacesService(db).createWorkspace({
+    organizationId: body.organizationId,
+    name: body.name,
+    description: body.description,
+    userId: user.id,
+  });
+
+  if (!workspace) {
+    throw new NotFoundError("organization not found");
+  }
+
+  return c.json({ workspace }, StatusCodes.CREATED);
 });
 
 workspacesRoutes.openapi(getWorkspaceByIdRoute, async (c) => {

@@ -124,6 +124,129 @@ describe("GET /workspaces", () => {
   });
 });
 
+describe("POST /workspaces", () => {
+  it("lets an organization owner create a workspace and adds them as its workspace admin with an audit row", async () => {
+    const { cookie, userId } = await signUp();
+    const { organization } = await createOrganization(cookie);
+    const name = `Kitchen ${nanoid(8)}`;
+
+    const response = await app.request("/api/v1/workspaces", {
+      method: "POST",
+      headers: { ...jsonHeaders(), cookie },
+      body: JSON.stringify({ organizationId: organization.id, name }),
+    });
+
+    expect(response.status).toBe(201);
+    const body = await jsonBody<{
+      workspace: {
+        id: string;
+        organizationId: string;
+        name: string;
+        slug: string;
+        createdBy: string;
+      };
+    }>(response);
+    expect(body.workspace.organizationId).toBe(organization.id);
+    expect(body.workspace.name).toBe(name);
+    expect(body.workspace.slug).toContain("kitchen-");
+    expect(body.workspace.createdBy).toBe(userId);
+
+    const [row] = await testDb
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, body.workspace.id));
+    expect(row?.name).toBe(name);
+    expect(row?.slug).toBe(body.workspace.slug);
+
+    const [membership] = await testDb
+      .select()
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.workspaceId, body.workspace.id));
+    expect(membership?.role).toBe("admin");
+    expect(membership?.organizationId).toBe(organization.id);
+
+    const [log] = await testDb
+      .select()
+      .from(activityLogs)
+      .where(eq(activityLogs.entityId, body.workspace.id));
+    expect(log).toMatchObject({
+      organizationId: organization.id,
+      workspaceId: body.workspace.id,
+      actorUserId: userId,
+      action: "created",
+      entityType: "workspace",
+      entityId: body.workspace.id,
+    });
+  });
+
+  it("reports an organization outside the caller's memberships as 404", async () => {
+    const userA = await signUp();
+    const userB = await signUp();
+    const { organization } = await createOrganization(userA.cookie);
+
+    const response = await app.request("/api/v1/workspaces", {
+      method: "POST",
+      headers: { ...jsonHeaders(), cookie: userB.cookie },
+      body: JSON.stringify({
+        organizationId: organization.id,
+        name: `Kitchen ${nanoid(8)}`,
+      }),
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects a plain organization member with 403", async () => {
+    const owner = await signUp();
+    const memberUser = await signUp();
+    const { organization } = await createOrganization(owner.cookie);
+    await addOrganizationMember(testDb, {
+      organizationId: organization.id,
+      userId: memberUser.userId,
+      role: "member",
+    });
+
+    const response = await app.request("/api/v1/workspaces", {
+      method: "POST",
+      headers: { ...jsonHeaders(), cookie: memberUser.cookie },
+      body: JSON.stringify({
+        organizationId: organization.id,
+        name: `Kitchen ${nanoid(8)}`,
+      }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects invalid input with 400", async () => {
+    const { cookie } = await signUp();
+    const { organization } = await createOrganization(cookie);
+
+    const response = await app.request("/api/v1/workspaces", {
+      method: "POST",
+      headers: { ...jsonHeaders(), cookie },
+      body: JSON.stringify({ organizationId: organization.id, name: "" }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects requests without a session with 401", async () => {
+    const response = await app.request("/api/v1/workspaces", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        organizationId: "11111111-1111-4111-8111-111111111111",
+        name: "Kitchen",
+      }),
+    });
+
+    expect(response.status).toBe(401);
+    const body = await jsonBody<{ code?: string }>(response);
+    expect(body.code).toBe("NOT_SIGNED_IN");
+  });
+});
+
 describe("GET /workspaces/{id}", () => {
   it("returns the workspace with its organization and the caller's membership rows", async () => {
     const { cookie } = await signUp();
