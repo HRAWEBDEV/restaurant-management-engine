@@ -65,7 +65,13 @@ const updateOrganizationInvitationSchema = createUpdateSchema(
 );
 const insertOrganizationInvitationSchema = createInsertSchema(
   organizationInvitations,
-);
+).omit({
+  id: true,
+  invitedBy: true,
+  status: true,
+  acceptedAt: true,
+  createdAt: true,
+});
 
 export type { OrganizationInvitation, InsertOrganizationInvitation };
 export {

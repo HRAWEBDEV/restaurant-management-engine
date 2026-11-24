@@ -154,11 +154,6 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
 
 ## Known issues (fix only when touching that module)
 
-- Duplicate `roleEnum` export in `organizationMembers.ts` and `workspaceMembers.ts`.
-- Misspelled `upadteWorkspaceMemberSchema` in `workspaceMembers.ts`.
-- `insertOrganizationInvitationSchema` is not narrowed (exposes `id`, `invitedBy`, `status`,
-  `acceptedAt`, `createdAt`); the member insert schemas still expose `addedBy`. Narrow these at
-  the route layer and always set `invitedBy`/`addedBy` from the session.
 - Permissions enforcement is just starting: `checkLevelPermissions` is called in the organizations
   routes (`organization:update` on `PATCH /{id}` and `PUT /{id}/logo`, resolved from the caller's
   `organization_members` row) and in the workspaces routes (`workspace:update` on `PATCH /{id}` and

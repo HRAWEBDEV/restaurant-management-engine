@@ -14,7 +14,7 @@ import { workspaces } from "./workspaces";
 import { user } from "../../../auth-schema";
 
 const workspaceRoles = ["admin", "member"] as const;
-export const roleEnum = pgEnum("workspace_roles", ["admin", "member"]);
+const workspaceRoleEnum = pgEnum("workspace_roles", workspaceRoles);
 
 type WorkspaceMember = typeof workspaceMembers.$inferSelect;
 type InsertWorkspaceMember = typeof workspaceMembers.$inferInsert;
@@ -26,7 +26,7 @@ const workspaceMembers = snakeCase.table(
     workspaceId: uuid("workspace_id").notNull(),
     organizationMemberId: uuid("organization_member_id").notNull(),
     organizationId: uuid("organization_id").notNull(),
-    role: roleEnum("role").notNull().default("member"),
+    role: workspaceRoleEnum("role").notNull().default("member"),
     joinedAt: timestamp("joined_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -68,8 +68,9 @@ const insertWorkspaceMemberSchema = createInsertSchema(workspaceMembers, {
   id: true,
   joinedAt: true,
   organizationId: true,
+  addedBy: true,
 });
-const upadteWorkspaceMemberSchema = createUpdateSchema(workspaceMembers, {
+const updateWorkspaceMemberSchema = createUpdateSchema(workspaceMembers, {
   role: z.enum(workspaceRoles),
 }).pick({
   id: true,
@@ -79,8 +80,9 @@ const upadteWorkspaceMemberSchema = createUpdateSchema(workspaceMembers, {
 export type { WorkspaceMember, InsertWorkspaceMember };
 export {
   workspaceMembers,
+  workspaceRoleEnum,
   selectWorkspaceMemberSchema,
   insertWorkspaceMemberSchema,
-  upadteWorkspaceMemberSchema,
+  updateWorkspaceMemberSchema,
   workspaceRoles,
 };

@@ -12,7 +12,7 @@ import { user } from "../../../auth-schema";
 import { z } from "@hono/zod-openapi";
 
 const ogMemberRoles = ["owner", "admin", "member"] as const;
-const roleEnum = pgEnum("organization_roles", ogMemberRoles);
+const organizationRoleEnum = pgEnum("organization_roles", ogMemberRoles);
 
 type OrganizationMember = typeof organizationMembers.$inferSelect;
 type InsertOrganizationMember = typeof organizationMembers.$inferInsert;
@@ -31,7 +31,7 @@ const organizationMembers = snakeCase.table(
       .references(() => user.id, {
         onDelete: "cascade",
       }),
-    role: roleEnum("role").notNull().default("member"),
+    role: organizationRoleEnum("role").notNull().default("member"),
     joinedAt: timestamp("joined_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -65,6 +65,7 @@ const insertOrganizationMemberSchema = createInsertSchema(organizationMembers, {
 }).omit({
   id: true,
   joinedAt: true,
+  addedBy: true,
 });
 const updateOrganizationMemberSchema = createUpdateSchema(organizationMembers, {
   role: z.enum(ogMemberRoles),
@@ -76,7 +77,7 @@ const updateOrganizationMemberSchema = createUpdateSchema(organizationMembers, {
 export type { OrganizationMember, InsertOrganizationMember };
 export {
   organizationMembers,
-  roleEnum,
+  organizationRoleEnum,
   selectOrganizationMemberSchema,
   insertOrganizationMemberSchema,
   updateOrganizationMemberSchema,
