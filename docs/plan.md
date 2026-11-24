@@ -52,12 +52,12 @@ payment capture and settlement, recipes & inventory, labor & tips, and derived r
 | --- | --- | --- | --- |
 | 0 — Foundations hardening | [00-foundations.md](plan/00-foundations.md) | Tenant middleware consumption everywhere, permission catalog, event bus + `domain_events`, DB gap pay-down, workspace settings (currency/timezone) | — |
 | 1 — Catalog (menu) | [01-catalog.md](plan/01-catalog.md) | Categories, items, variants, modifier groups, tax classes, availability, 86, images, stations | 0 |
-| 2 — Recipes & inventory | [02-inventory-recipes.md](plan/02-inventory-recipes.md) | Ingredients, UoM, recipes/BOM, suppliers, POs, stock ledger, counts, waste | 1 |
+| 2 — Recipes & inventory | [02-inventory-recipes.md](plan/02-inventory-recipes.md) | Ingredients, UoM, recipes/BOM, suppliers, POs, stock ledger, counts, waste | 0, 1 |
 | 3 — Floor | [03-floor.md](plan/03-floor.md) | Sections, tables + states, layout, reservations, merge/split | 0 |
-| 4 — Orders engine | [04-orders.md](plan/04-orders.md) | Order lifecycle state machine, line items + modifiers, coursing, checks, discounts, voids/comps, idempotency, optimistic concurrency | 1, 3 |
-| 5 — Kitchen | [05-kitchen.md](plan/05-kitchen.md) | Auto-generated tickets, station routing, KDS flow (queue → bump → recall) | 4 |
-| 6 — Payments | [06-payments.md](plan/06-payments.md) | Payment ledger, tenders, split/partial, tips, refunds, cash drawer, EOD close | 4 |
-| 7 — Staff & labor | [07-staff-labor.md](plan/07-staff-labor.md) | Staff profiles + PIN clock-in, time clock, schedules, labor cost, tip pools | 4, 6 |
+| 4 — Orders engine | [04-orders.md](plan/04-orders.md) | Order lifecycle state machine, line items + modifiers, coursing, checks, discounts, voids/comps, idempotency, optimistic concurrency | 0, 1, 3 |
+| 5 — Kitchen | [05-kitchen.md](plan/05-kitchen.md) | Auto-generated tickets, station routing, KDS flow (queue → bump → recall) | 1, 4 |
+| 6 — Payments | [06-payments.md](plan/06-payments.md) | Payment ledger, tenders, split/partial, tips, refunds, cash drawer, EOD close | 0, 4 |
+| 7 — Staff & labor | [07-staff-labor.md](plan/07-staff-labor.md) | Staff profiles + PIN clock-in, time clock, schedules, labor cost, tip pools | 0, 4, 6 |
 | 8 — Reporting | [08-reporting.md](plan/08-reporting.md) | Sales, COGS, labor %, menu engineering, waste variance, turn times; business-day boundaries | 1–7 |
 | 9 — Platform & integrations | [09-platform-integrations.md](plan/09-platform-integrations.md) | Event persistence + webhooks, customers/loyalty, offline sync, printers/terminals/delivery/accounting integrations, rate limiting | all |
 
@@ -80,8 +80,9 @@ Phase 0 (foundations)
 
 Phases 2 and 3 are independent of each other and could be swapped; orders (4) needs both
 catalog (items to sell) and floor (tables to attach to). Kitchen (5) and payments (6) are
-independent of each other once orders exist. Reporting (8) is deliberately last so it is built
-against real event streams rather than guessed shapes.
+independent of each other once orders exist — kitchen also reads Phase 1's `kitchen_stations`
+(items carry `station_id`). Reporting (8) is deliberately last so it is built against real
+event streams rather than guessed shapes.
 
 ## Delivery milestones
 

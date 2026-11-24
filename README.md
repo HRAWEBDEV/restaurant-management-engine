@@ -16,10 +16,10 @@ planned.
 | --- | --- |
 | Identity & auth (Better Auth: email/password, username, sessions) | Built |
 | Tenancy (organizations, workspaces, memberships) — schema, services, routes | Built |
-| Organization invitations — schema | Built (service/routes pending) |
+| Organization invitations — schema, service, routes (send/list/revoke/accept) | Built |
 | Audit log (`activity_logs` + `ActivityLogger`) | Built (partial writers) |
-| Permissions scaffold (role catalogs + `checkLevelPermissions`) | Built (partial enforcement) |
-| Catalog, Floor, Orders, Kitchen, Inventory, Staff, Payments, Reporting | Planned (see `docs/product-scope.md`) |
+| Permissions scaffold (role catalogs + `checkLevelPermissions`/`requireLevelPermissions`) | Built (partial enforcement) |
+| Catalog, Floor, Orders, Kitchen, Inventory, Staff, Payments, Reporting | Planned (see `docs/plan.md`) |
 
 ## Tech stack
 

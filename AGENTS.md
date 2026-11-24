@@ -2,10 +2,11 @@
 
 `restaurant-manager-api` is a Bun-native, multi-tenant HTTP API for restaurant operations
 (catalog, floor, orders, kitchen, inventory, staff, payments, reporting). It is early-stage:
-auth, organization, user, and workspace routes; the full tenancy schema (organizations,
-workspaces, members, invitations, activity logs); services for those aggregates; and a
-permissions scaffold exist. Member/invitation routes and most operational domain modules are
-not built yet.
+auth, organization, user, workspace, member, and invitation routes; the full tenancy schema
+(organizations, workspaces, members, invitations, activity logs); services for those aggregates;
+and a permissions scaffold exist. The operational domain modules (catalog, floor, orders,
+kitchen, inventory, staff, payments, reporting) are not built yet — their delivery plan is
+`docs/plan.md` with one doc per phase under `docs/plan/`.
 
 Design/scope lives in the docs — load them only when the task needs them:
 
@@ -14,6 +15,9 @@ Design/scope lives in the docs — load them only when the task needs them:
 - `docs/api.md` — API conventions and the wired endpoint catalog.
 - `docs/product-scope.md` — full feature list and domain rules.
 - `docs/testing.md` — how tests are written and run in this codebase.
+- `docs/plan.md` + `docs/plan/` — delivery plan for the operational domains: phase order and,
+  per phase, the data model, API surface, permissions, events, and testing plan. Load the
+  relevant phase doc when building a domain.
 
 ## Commands
 
@@ -47,9 +51,13 @@ src/db/utils/trackChanges.ts  created_at / updated_at columns
 src/middlewares/              authMiddleware (session -> context, 401 NOT_SIGNED_IN),
                               organizationMemberMiddleware (x-organization-id -> membership row),
                               workspaceRoleMiddleware (x-workspace-id -> workspace role; owners
-                              get implicit admin) — wired, not consumed by routes yet
-src/services/                 DB-access classes (organizations, workspaces, organization members,
-                              users, ActivityLogger; AccountsService orchestrates organization +
+                              get implicit admin), requireLevelPermissions (declarative
+                              permission middleware) — the org member middleware is consumed
+                              by the invitation routes; the workspace role middleware is wired,
+                              awaiting workspace-scoped mounts
+src/services/                 DB-access classes (organizations, organization members,
+                              organization invitations, workspaces, workspace members, users,
+                              ActivityLogger; AccountsService orchestrates organization +
                               default workspace)
 src/utils/                    AuthContext helpers, tenant header helpers (organizationContext,
                               workspaceContext), error classes (InternalError, NotFoundError,
@@ -59,8 +67,10 @@ src/utils/roles-permissions/  per-role permission strings + checkLevelPermission
 src/utils/activityLoggerHelpers.ts  defineActivity / buildChanges / renderSummary audit helpers
 src/utils/activityDefinitions.ts    per-entity audit definitions (organizationActivity, workspaceActivity)
 src/v1/api/index.ts           /api/v1 router: health, /doc, /doc/ui, auth routes, auth guard,
-                              organizations/users/workspaces routes, tenant middlewares, 404/onError
-src/v1/api/routes/*.ts        route modules per domain (auth, organizations, users, workspaces wired)
+                              organizations/users/workspaces/invitations routes, tenant
+                              middlewares, 404/onError
+src/v1/api/routes/*.ts        route modules per domain (auth, organizations, users, workspaces,
+                              invitations wired)
 static/                       served at /static/* (serveStatic); uploaded assets, not committed
 src/v1/utils/apiErrorResponse.ts  errorResponseSchema + createErrorResponse
 auth-schema.ts                Better Auth tables + user Zod schemas (generated)
@@ -175,14 +185,16 @@ auth-schema.ts                Better Auth tables + user Zod schemas (generated)
   `workspaceRoleMiddleware` has not run. The order of the two middlewares
   matters: `workspaceRoleMiddleware` reads the membership row `organizationMemberMiddleware`
   sets.
-- Workspace and invitation routes are the remaining unwired domains (auth, organizations (incl.
-  member listing and owner-only member role updates), users, and workspaces are wired).
-  `ActivityLogger` is called from the organizations, workspaces, members (role updates), and
-  invitations services.
-- Domain tables lack `relations()` and several indexes (see `docs/data-model.md` § Known gaps).
+- All currently planned route modules are wired (auth, organizations incl. member listing,
+  role updates, and removal, users, workspaces, invitations). The operational domain modules
+  are not built yet — see `docs/plan.md`. `ActivityLogger` is called from the organizations,
+  workspaces, members, and invitations services (role updates and removals audited).
+- Domain tables lack `relations()` by convention and several indexes (see
+  `docs/data-model.md` § Known gaps).
 - "At least one organization owner" is not enforced anywhere except incidentally: the
-  member role-update route (`PATCH /organizations/{id}/members/{memberId}`, owner-only)
-  rejects an owner changing their own role.
+  owner-only member role-update route (`PATCH /organizations/{id}/members/{memberId}`)
+  rejects an owner changing their own role, and the member removal route
+  (`DELETE /organizations/{id}/members/{memberId}`) refuses self-removal.
 - Invitation acceptance is implemented in `OrganizationInvitationsService.acceptInvite`
   (case-insensitive email matching, "not already a member" check, membership insert via
   `OrganizationMembersService.addOrganizationMember`, `invitation.accepted` + `member.created`

@@ -34,15 +34,12 @@ None — works on the existing codebase only.
     the header organization (mismatch → `ForbiddenError`) — this closes the disagreement case
     called out in `AGENTS.md` § Known issues.
 
-### 3. Generalize declarative permission middleware
+Declarative permission middleware already exists: `requireLevelPermissions({ level, permission })`
+lives in `src/middlewares/requireLevelPermissions.ts` (with tests), resolves roles from the
+context membership rows the tenant middlewares set, and supports organization, workspace, and
+`organizationWorkspace` levels. Reuse it everywhere — do not rebuild it.
 
-- Promote `requireLevelPermissions` from being invitation-route-local into
-  `src/middlewares/` so every domain can declare
-  `requireLevelPermissions({ level, permission })` on a route; roles are resolved from the
-  context membership rows set by the tenant middlewares. Organization-scoped usage passes only
-  the organization member; workspace-scoped usage also passes the workspace role.
-
-### 4. Permission catalog — pre-declare every domain's strings
+### 3. Permission catalog — pre-declare every domain's strings
 
 Extend `src/utils/roles-permissions/` with the full permission vocabulary the later phases
 will consume (grant them only to `admin` roles today; tune `member` grants per phase as
@@ -59,24 +56,23 @@ domains land). Names follow the existing `resource:action` / `resource:sub:actio
 | staff | `staff:read`, `staff:manage`, `labor:clock`, `labor:schedule:*`, `labor:tips:*` |
 | reports | `report:read` |
 
-Declare them now (even with empty grants) so no phase invents ad-hoc strings, and add unit
-tests asserting role → grants mappings.
+Declare them now (even with empty grants) so no phase invents ad-hoc strings. Test the checking
+*behavior* (`checkLevelPermissions` / `requireLevelPermissions`) with role inputs derived from
+the catalogs — never assert the in-progress grant lists themselves (`docs/testing.md` § 2).
 
-### 5. DB gap pay-down (from `docs/data-model.md` § Known gaps)
+### 4. DB gap pay-down (from `docs/data-model.md` § Known gaps)
 
-- Rename the duplicate `roleEnum` exports to `organizationRoleEnum` / `workspaceRoleEnum`.
-- Fix the `upadteWorkspaceMemberSchema` typo.
-- Narrow `insertOrganizationInvitationSchema` (drop `id`, `invitedBy`, `status`, `acceptedAt`,
-  `createdAt`) and the member insert schemas (`addedBy`), moving server-managed field handling
-  into services.
 - Add the missing indexes: `organization_members (user_id)`,
   `organization_invitations (invited_user_email, status)`, `organization_invitations (invited_by)`,
   `workspaces (organization_id)`, `workspace_members (workspace_id)`,
   `workspace_members (organization_id)`.
 - Decide and implement the **owner invariant**: an organization must keep at least one `owner`
   (service-level check on role update/removal/transfer; transfer-ownership endpoint optional).
+- No work left on the schema-export cleanups — the `organizationRoleEnum`/`workspaceRoleEnum`
+  renames, the `updateWorkspaceMemberSchema` spelling fix, and the narrowed invitation/member
+  insert schemas already landed.
 
-### 6. Domain events scaffold
+### 5. Domain events scaffold
 
 - `src/events/`: typed `DomainEvent { id, seq, workspaceId, type, payload, actor, occurredAt }`,
   an in-process publisher (`publish(event)`), and a subscriber registry (`subscribe(type, fn)`).
@@ -90,19 +86,20 @@ tests asserting role → grants mappings.
   payloads for projections (kitchen tickets, depletion, reports). Both are written by the same
   mutation. Document this split in `docs/data-model.md`.
 
-### 7. Workspace settings for money & time
+### 6. Workspace settings for money & time
 
 - Extend `workspaces` (or add a 1:1 `workspace_settings` table — prefer columns on `workspaces`
   for now): `currency` (varchar 3, ISO-4217, default `USD`), `timezone` (IANA name, default
   `UTC`), `business_day_boundary` (time-of-day, default `00:00`). Orders, payments, EOD close,
   and reporting all read these instead of hardcoding.
 
-### 8. Test factories
+### 7. Test factories
 
-- `src/services/__tests__/factories.ts` (or `src/testing/`): helpers that create
-  `{ user, organization, workspace, organizationMember, workspaceMember, cookieJar }` bundles so
-  every domain test can arrange tenancy in one call. Refactor existing tests to use them where
-  trivial.
+- Extend the existing `src/db/__tests__/helpers/factories.ts` (the shared-helpers location per
+  `docs/testing.md`) with bundle helpers that create
+  `{ user, organization, workspace, organizationMember, workspaceMember, cookieJar }` in one
+  call, so every domain test can arrange tenancy — including an authenticated request — without
+  boilerplate. Refactor existing tests to use them where trivial.
 
 ## Audit & events
 
@@ -122,18 +119,19 @@ tests asserting role → grants mappings.
 - Tenant middleware zones: a route mounted after the middlewares 401s/403s appropriately and
   receives populated context.
 - `requireWorkspaceContext` throws without the middleware, matches path-param organization ids.
-- Permission catalog unit tests (role → grant mapping, `checkLevelPermissions` behavior per
-  level).
+- Permission behavior tests: `checkLevelPermissions` / `requireLevelPermissions` with role inputs
+  derived from the catalogs (never assertions on the WIP grant lists).
 - `domain_events` insertion on a sample transactional service; rollback removes the event row.
 - Workspace settings validation (currency format, timezone accepted by `Intl`).
 - Factories round-trip in a real test file.
 
 ## Definition of done
 
-- [ ] All future-mount zones documented in `src/v1/api/index.ts`; helpers and generalized
-      `requireLevelPermissions` middleware available.
-- [ ] Permission catalog declared for all eight domains with tests.
-- [ ] Known gaps 1–8 from `docs/data-model.md` closed (or explicitly deferred with a note).
+- [ ] All future-mount zones documented in `src/v1/api/index.ts`; `requireWorkspaceContext` and
+      the path-param guard available (`requireLevelPermissions` already exists — reuse it).
+- [ ] Permission catalog declared for all eight domains, with behavior tests derived from it.
+- [ ] Remaining `docs/data-model.md` § Known gaps closed: missing indexes added, the
+      at-least-one-owner invariant enforced.
 - [ ] `domain_events` table migrated; scaffold published/subscribe works in a transaction test.
 - [ ] Workspace currency/timezone/business-day settings exist and are validated.
 - [ ] Test factories exist and are used by at least one existing suite.

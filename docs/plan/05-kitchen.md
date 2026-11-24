@@ -1,6 +1,6 @@
 # Phase 5 — Kitchen
 
-Status: **planned** · Depends on: Phase 4 · Milestone: **M6 — kitchen flow (first end-to-end service)**
+Status: **planned** · Depends on: Phases 1, 4 · Milestone: **M6 — kitchen flow (first end-to-end service)**
 
 ## Goal
 
@@ -33,7 +33,7 @@ duplicate tickets. Items route by their item's `station_id`; null station → de
   `order.item.voided` flips matching ticket items to `voided` (or removes if not started).
 - **State flow**: item `queued → preparing (started_at) → ready (bumped_at)`; ticket state is
   derived from its items (all ready → ready). `served` is a ticket-level terminal bump;
-  `recalled` reopens a recently served ticket (scope 50) — allowed within a configurable
+  `recalled` reopens a recently served ticket (scope 49) — allowed within a configurable
   window, writes a transition row.
 - **Expediting** (scope 50): the queue read orders tickets oldest-first, long-waiting items
   flagged with elapsed time per item state.
@@ -53,13 +53,13 @@ decides websockets/SSE).
 | POST | `/workspace/kitchen/tickets/{ticketId}/recall` | window-checked reopen |
 | POST | `/workspace/kitchen/tickets/{ticketId}/items/{itemId}/start` `/bump` | item-level flow |
 | POST | `/workspace/kitchen/tickets/{ticketId}/items/{itemId}/reroute` | `{ stationId }` |
-| GET/POST | `/workspace/kitchen/stations` · PATCH/DELETE `/{stationId}` | extend Phase 1 CRUD to add routing/default flags |
+| PATCH | `/workspace/catalog/stations/{stationId}` | extend the Phase 1 station routes in place with routing/default flags — kitchen adds no second station management surface |
 
 ## Services
 
 `KitchenTicketsService` (creation from events with dedupe, state flow, recall),
-`KitchenStationsService` (extended CRUD + default station resolution). Subscribers live in
-`src/events/subscribers/kitchen.ts`.
+`KitchenStationsService` (extends the Phase 1 station service with routing/default-station
+resolution). Subscribers live in `src/events/subscribers/kitchen.ts`.
 
 ## Permissions
 

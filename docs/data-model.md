@@ -143,9 +143,9 @@ There is no scheduler: a `pending` row past `expires_at` is expired lazily on re
 > `getOrganizationInvitation`, `sendInvite`, `revokeInvite`, `acceptInvite`) and mounted routes
 > (`GET /invitations`, `POST /organizations/{organizationId}/invitations/{invitationId}/accept`,
 > `GET|POST /organization/invitations`,
-> `POST /organization/invitations/{invitationId}/revoke`). Its insert
-> Zod schema is also not narrowed — it still exposes `id`, `invitedBy`, `status`, `acceptedAt`,
-> `createdAt` — so route-level schemas must narrow these before use (see Known gaps).
+> `POST /organization/invitations/{invitationId}/revoke`). The insert Zod schema is narrowed —
+> `id`, `invitedBy`, `status`, `acceptedAt`, and `createdAt` are omitted; `invitedBy` is set
+> from the session.
 
 ### `workspaces` — `workspaces.ts`
 
@@ -177,10 +177,8 @@ workspace members exist, because the composite FK from `workspace_members` rejec
 
 Unique: `(organization_member_id, workspace_id)`. Cross-organization rows are impossible: both
 composite FKs must agree on `organization_id`. `insertWorkspaceMemberSchema` omits
-`organizationId` (the service derives it from the workspace).
-
-Known naming issue: the update schema is exported as `upadteWorkspaceMemberSchema` (**sic**), and
-both member schema files export a symbol named `roleEnum` (see Known gaps).
+`organizationId` (the service derives it from the workspace) and `addedBy` (set by the server
+from the session).
 
 ### `activity_logs` — `activityLogs.ts`
 
@@ -267,6 +265,13 @@ Enforcement status:
   members without the grant get 403.
 - `PATCH /workspaces/{id}` enforces `workspace:update` at `organizationWorkspace` level using both
   the caller's organization and workspace membership rows.
+- `PATCH|DELETE /workspaces/{id}/members/{memberId}` enforce `workspace:member:update` /
+  `workspace:member:remove` at `organizationWorkspace` level; callers cannot target their own
+  membership (403 otherwise).
+- The organization member routes are guarded by ownership rather than permission strings:
+  `PATCH|DELETE /organizations/{id}/members/{memberId}` are owner-only and refuse self
+  role-change/self-removal; `GET /organizations/{id}/members` is readable by members, with
+  signed-in non-members getting a limited view.
 - `GET /organization/invitations`, `POST /organization/invitations`, and
   `POST /organization/invitations/{invitationId}/revoke` enforce
   `organization:invitation:read` / `organization:member:invite` /
@@ -411,11 +416,14 @@ typed so the `diff` allowlist references real entity fields and a typo in `actio
 time. Defined today: `organizationActivity`, `workspaceActivity`, `organizationInvitationActivity`,
 and `organizationMemberActivity` (diffs over their mutable fields).
 
-Current writers: `OrganizationsService.updateOrganization` (`organization.updated`),
-`WorkspacesService.createWorkspace` (`workspace.created`) and `updateWorkspace`
-(`workspace.updated`), `OrganizationInvitationsService.sendInvite`
-(`invitation.created`) and `acceptInvite` (`invitation.accepted`, `member.created`), and
-`OrganizationMembersService.updateOrganizationRole` (`organization_member.updated`).
+Current writers: `OrganizationsService.updateOrganization` (`organization.updated`, also fired by
+the logo route), `WorkspacesService.createWorkspace` / `updateWorkspace` (`workspace.created` /
+`workspace.updated`), `WorkspaceMembersService.updateWorkspaceRole` /
+`removeWorkspaceMember` (`workspace_member.updated` / `workspace_member.deleted`),
+`OrganizationMembersService.updateOrganizationRole` / `removeOrganizationMember`
+(`organization_member.updated` / `organization_member.deleted`), and
+`OrganizationInvitationsService.sendInvite` / `revokeInvite` / `acceptInvite`
+(`invitation.created` / `invitation.revoked` / `invitation.accepted` + `member.created`).
 
 ## Constraints and invariants
 
@@ -440,33 +448,26 @@ Expected but **not** enforced:
 
 ## Known gaps and follow-ups
 
-1. **Invitation acceptance is unimplemented.** When built, it must require a verified email,
-   compare case-insensitively (normalized on write), and check "not already a member" in the
-   service.
-2. **Member routes are minimal.** `OrganizationMembersService`
-   (`getOrganizationMembers`, `updateOrganizationRole`) is mounted only through
-   `GET /organizations/{id}/members` and
-    `PATCH /organizations/{id}/members/{memberId}` (owner-only role changes, with
-   an `organization_member.updated` audit row). There are no member removal
-   routes, and the "at least one organization owner" invariant is only
-   incidentally preserved by that route's self-role-change guard.
-3. **Zod schemas leak server-managed fields.** `insertOrganizationInvitationSchema` is not narrowed
-   (exposes `id`, `invitedBy`, `status`, `acceptedAt`, `createdAt`); the member insert schemas still
-   expose `addedBy`. Narrow at the route layer; always set `invitedBy`/`addedBy` from the session.
-4. **Duplicate `roleEnum` export.** Both `organizationMembers.ts` and `workspaceMembers.ts` export
-   `roleEnum`; rename to `organizationRoleEnum` / `workspaceRoleEnum` before any barrel re-export.
-5. **Misspelled `upadteWorkspaceMemberSchema`.** Rename to `updateWorkspaceMemberSchema`.
-6. **Missing indexes.** Add `organization_members (user_id)` (only covered as the second unique-
-   index column today), `organization_invitations (invited_user_email, status)`,
+Previously listed gaps have been closed: invitation acceptance is shipped (see Canonical
+flows), and the schema-export cleanups are done — `organizationRoleEnum` / `workspaceRoleEnum`
+renames, the `updateWorkspaceMemberSchema` spelling fix, and the narrowed invitation/member
+insert schemas. Domain schemas intentionally declare no `relations()`; explicit joins are the
+convention, not debt to pay down.
+
+1. **The "at least one owner" invariant is not enforced.** It is only incidentally preserved:
+   the owner-only member routes refuse self role-change and self-removal. Enforce it explicitly
+   in the service layer (role update/removal/transfer) or add a transfer-ownership flow —
+   planned as Phase 0 work (`docs/plan/00-foundations.md`).
+2. **Missing indexes.** Add `organization_members (user_id)` (only covered as the second
+   unique-index column today), `organization_invitations (invited_user_email, status)`,
    `organization_invitations (invited_by)`, `workspaces (organization_id)`,
-   `workspace_members (workspace_id)`, `workspace_members (organization_id)`.
-7. **No domain relations.** Domain schemas have no `relations()`; keep explicit joins, or add
-   relations before relying on `db.query.*`.
-8. **Orphan risk on ownership.** Deleting the last owner leaves the organization unadministrable.
-   Enforce "at least one owner" in the service layer or transfer ownership explicitly on removal.
-9. **Tenant middlewares not consumed yet.** `organizationMemberMiddleware` /
-   `workspaceRoleMiddleware` are wired but no route requires them; routes currently authorize in
-   handlers. Wire future workspace-scoped mounts after those `use(...)` lines.
-10. **Operational data is not attached yet.** No table references `workspace_id` (except
-    `activity_logs`). Catalog/floor/orders/etc. should carry a `workspace_id` FK, and every query
-    must be scoped by an authorized workspace.
+   `workspace_members (workspace_id)`, `workspace_members (organization_id)` — planned as
+   Phase 0 work.
+3. **`workspaceRoleMiddleware` has no consumers yet.** `organizationMemberMiddleware` is
+   consumed by the organization-scoped invitation routes (mounted between the two
+   `use(...)` lines); no route requires a workspace role yet. Workspace-scoped domains mount
+   after `use(workspaceRoleMiddleware)` per the plan's mount policy
+   (`docs/plan/00-foundations.md`).
+4. **Operational data is not attached yet.** No table references `workspace_id` (except
+   `activity_logs`). Catalog/floor/orders/etc. carry a `workspace_id` FK as each phase lands
+   (`docs/plan/`).

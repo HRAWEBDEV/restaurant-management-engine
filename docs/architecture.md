@@ -59,9 +59,9 @@ src/
 │   ├── authMiddleware.ts        session -> context user/session, 401 NOT_SIGNED_IN
 │   ├── organizationMemberMiddleware.ts  x-organization-id header -> membership row on context
 │   └── workspaceRoleMiddleware.ts       x-workspace-id header -> workspace role on context
-├── services/                    DB-access classes (organizations, workspaces, organization
-│                                members, workspace members, users, activity logger,
-│                                accounts orchestrator)
+├── services/                    DB-access classes (organizations, organization members,
+│                                organization invitations, workspaces, workspace members, users,
+│                                activity logger, accounts orchestrator)
 ├── utils/
 │   ├── AuthContext.ts           context user/session accessors + AuthContext type
 │   ├── organizationContext.ts   x-organization-id header helpers
@@ -78,7 +78,8 @@ src/
 ├── v1/
 │   ├── api/index.ts             /api/v1 router: health, /doc, /doc/ui, auth routes, auth guard,
 │   │                            domain routes, tenant middlewares, notFound/onError
-│   ├── api/routes/*.ts          route modules per domain (auth, organizations, users, workspaces)
+│   ├── api/routes/*.ts          route modules per domain (auth, organizations, users,
+│   │                            workspaces, invitations)
 │   └── utils/apiErrorResponse.ts  errorResponseSchema + createErrorResponse
 auth-schema.ts                   Better Auth tables + user Zod schemas (generated, do not edit)
 drizzle/                         generated snapshots + SQL migrations (do not hand-edit)
@@ -94,14 +95,18 @@ Order is load-bearing — a route mount only sees the middlewares registered bef
 2. `authRoutes` mounted (public: sign-up, sign-in, sign-out, change password, `POST /auth/account`).
 3. `use(authMiddleware)` — every mount after this requires a signed-in user.
 4. `organizationsRoutes`, `usersRoutes`, `workspacesRoutes`.
-5. `use(organizationMemberMiddleware)` then `use(workspaceRoleMiddleware)` — tenant middlewares
-   for future route mounts. `organizationMemberMiddleware` must stay above
-   `workspaceRoleMiddleware`, which reads the membership row the former sets.
+5. `use(organizationMemberMiddleware)`, then the organization-scoped invitation routes (the
+   middleware's first consumers, enforcing permissions with `requireLevelPermissions`), then
+   `use(workspaceRoleMiddleware)` — future workspace-scoped domains mount after it.
+   `organizationMemberMiddleware` must stay above `workspaceRoleMiddleware`, which reads the
+   membership row the former sets.
 6. `notFound` and `onError` last.
 
-Consequence: today's signed-in routes authorize themselves in handlers (via
+Consequence: today's signed-in domain routes authorize themselves in handlers (via
 `OrganizationsService.getOrganizationById` / `WorkspacesService.getWorkspaceById`, which return the
-caller's membership rows); the tenant middlewares are wired but not consumed by any route yet.
+caller's membership rows). `organizationMemberMiddleware` is consumed by the organization-scoped
+invitation routes; `workspaceRoleMiddleware` awaits its first consumer — workspace-scoped
+domains mount after it as the delivery plan lands.
 
 ## Dependencies
 

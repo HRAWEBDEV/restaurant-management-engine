@@ -1,6 +1,6 @@
 # Phase 7 — Staff & Labor
 
-Status: **planned** · Depends on: Phases 4, 6 · Milestone: **M8 — labor operational**
+Status: **planned** · Depends on: Phases 0, 4, 6 · Milestone: **M8 — labor operational**
 
 ## Goal
 

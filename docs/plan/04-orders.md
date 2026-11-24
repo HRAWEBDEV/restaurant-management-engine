@@ -1,6 +1,6 @@
 # Phase 4 — Orders Engine
 
-Status: **planned** · Depends on: Phases 1, 3 · Milestone: **M5 — orders engine live**
+Status: **planned** · Depends on: Phases 0, 1, 3 · Milestone: **M5 — orders engine live**
 
 ## Goal
 
@@ -16,6 +16,8 @@ lands, a POS client can run a full order write-path, and Phase 5 (kitchen) / Pha
 - Phase 3 — tables to attach dine-in orders to.
 - Phase 2 — its `InventoryMovementsService.recordMovement` receives depletion from here (the
   only Phase-2 touchpoint: one subscriber).
+- Phase 0 — the event bus + `domain_events` for subscribers, and workspace settings (service
+  charge).
 
 ## Data model — new files in `src/db/schemas/`
 
@@ -62,15 +64,16 @@ draft ──place──> open ──first course fired──> in_progress ──
 - **Coursing** (scope 31–32): items belong to a course (or no course = fire-with-next);
   firing a course stamps `fired_at` on its items, flips order to `in_progress`, emits the event
   Phase 5 consumes.
-- **Depletion hook**: on course fire (and on placement for takeaway), publish
-  `order.items.fired`; a Phase-2-built subscriber calls `recordMovement` per recipe line —
-  idempotent via the event id as `source_id`.
+- **Depletion hook**: the depletion subscriber listens to `order.course.fired` (and
+  `order.placed` for takeaway orders) and calls `recordMovement` per recipe line — idempotent
+  via the event id as `source_id`.
 - `order_number` is a per-workspace sequence (service-side `SELECT ... FOR UPDATE` on a
   workspace counter row or `INSERT ... RETURNING` with retry), never client-sent.
 
 ## API surface
 
-Mounted after the tenant middlewares. All mutating order endpoints take `Idempotency-Key`
+Mounted after the tenant middlewares — except the public takeaway status read below, which
+mounts before `authMiddleware`. All mutating order endpoints take an `Idempotency-Key` header
 (optional but stored when present) and require a body `version` for concurrency.
 
 | Method | Path | Notes |

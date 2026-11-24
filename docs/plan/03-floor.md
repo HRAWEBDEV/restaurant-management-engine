@@ -28,16 +28,17 @@ Tenancy: all workspace-scoped; unique `(workspace_id, name)` on tables and secti
 
 ```
 free ──seat──> seated ──first order placed──> ordered ──bill requested──> bill_requested
-   ^                                                                 │ payment settled (Phase 6)
-   │                                                                 v
- dirty <─────bussed/cleaned──────────────────────────────────────── dirty
+  ^                                                                           │
+  │                                                                           │ payment settled (Phase 6)
+  │                                                                           v
+  └──────────────────── bussed/cleaned ───────────────────────────────────── dirty
 ```
 
 - Transitions are performed by routes (`POST .../tables/{id}/state { to, reason }`) or by
-  domain events (order placed → `ordered`; payment settled → `dirty`); the service validates
-  legality, illegal transition → 409.
-- Every transition writes a `table_state_history` row. `seated → free` (walk-out) requires a
-  reason and permission.
+  domain events (`order.placed` → `ordered`, `payment.check.settled` → `dirty`); the service
+  validates legality, illegal transition → 409.
+- Every transition writes a `table_state_history` row. One exceptional edge:
+  `seated → free` (walk-out) is allowed with a reason and permission.
 
 ### Merge / split
 
@@ -81,8 +82,8 @@ summary), `reservationActivity`. `tableStateHistory` is the per-transition recor
 activity-logged separately).
 
 Events emitted: `floor.table.seated`, `floor.table.state_changed`,
-`floor.reservation.created/confirmed/seated/cancelled`. Consumed: `payment.settled` (Phase 6)
-→ `dirty`; `order.placed` (Phase 4) → `ordered`.
+`floor.reservation.created/confirmed/seated/cancelled`. Consumed: `order.placed` (Phase 4) →
+`ordered`; `payment.check.settled` (Phase 6) → `dirty`.
 
 ## Testing plan
 

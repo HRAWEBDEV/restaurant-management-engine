@@ -18,10 +18,10 @@ The tenancy foundation is built; the operational domains below are scoped but no
 | Domain | Status | Notes |
 | --- | --- | --- |
 | Identity & auth | **Built** | Better Auth (email/password + username), session cookies, profile management |
-| Tenancy (organizations, workspaces, members) | **Built** | Services + routes for organizations, users, workspaces; member service exists (routes pending) |
-| Invitations | **Schema built** | Table + flows documented in `docs/data-model.md`; service/routes pending |
-| Audit log | **Built (partial writers)** | `activity_logs` + `ActivityLogger`; organization/workspace mutations audited |
-| Permissions scaffold | **Built (partial enforcement)** | Catalogs + `checkLevelPermissions`; enforced on organization and workspace update routes |
+| Tenancy (organizations, workspaces, members) | **Built** | Services + routes for organizations, users, workspaces, and members (list, role update, removal) |
+| Invitations | **Built** | Send/list/revoke/accept shipped as routes (see `docs/api.md`) |
+| Audit log | **Built (partial writers)** | `activity_logs` + `ActivityLogger`; organization/workspace/member/invitation mutations audited |
+| Permissions scaffold | **Built (partial enforcement)** | Catalogs + `checkLevelPermissions`/`requireLevelPermissions`; enforced on organization/workspace update routes, workspace member management, and invitation routes |
 | Catalog, Floor, Orders, Kitchen, Inventory, Staff, Payments, Reporting | **Planned** | See capabilities below |
 
 ## Capabilities

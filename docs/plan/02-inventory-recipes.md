@@ -1,6 +1,6 @@
 # Phase 2 — Recipes & Inventory
 
-Status: **planned** · Depends on: Phase 1 · Milestone: **M3 — recipes & stock tracked**
+Status: **planned** · Depends on: Phases 0, 1 · Milestone: **M3 — recipes & stock tracked**
 
 ## Goal
 
@@ -26,7 +26,7 @@ this phase's ledger is the subscriber target).
 | `suppliers.ts` | `suppliers` | `workspace_id`, `name`, `email`, `phone`, `notes`, `is_active` |
 | `purchaseOrders.ts` | `purchase_orders` | `workspace_id`, `supplier_id`, `status` enum `draft|sent|received|closed|cancelled`, `expected_at`, `received_at`, `reference` |
 | `purchaseOrderLines.ts` | `purchase_order_lines` | `purchase_order_id`, `ingredient_id`, `quantity`, `unit`, `unit_cost` int minor units, `received_quantity` numeric |
-| `stockMovements.ts` | `stock_movements` | **append-only ledger**; `workspace_id`, `ingredient_id`, `type` enum `receipt|depletion|waste|count_adjustment|manual_adjustment`, `quantity` numeric signed (− depletes), `unit`, `unit_cost` int nullable, `source_type`/`source_id` (order line, PO, count…), `actor_user_id`, `reason` |
+| `stockMovements.ts` | `stock_movements` | **append-only ledger**; `seq` bigserial (ordering key), `workspace_id`, `ingredient_id`, `type` enum `receipt|depletion|waste|count_adjustment|manual_adjustment`, `quantity` numeric signed (− depletes), `unit`, `unit_cost` int nullable, `source_type`/`source_id` (order line, PO, count…), `actor_user_id`, `reason` |
 | `stockCounts.ts` / `stockCountLines.ts` | `stock_counts`, `stock_count_lines` | count header (status `open|completed`), lines (ingredient, counted qty) — completing a count writes `count_adjustment` movements |
 | `parLevels.ts` | `par_levels` | `ingredient_id`, `par_quantity`, `reorder_threshold` numeric |
 
@@ -42,8 +42,9 @@ Indexing: `stock_movements (workspace_id, ingredient_id, seq)` and
   `unit_cost` and `cost_per_base_unit` are ints.
 - Movements are append-only; a mistaken entry is corrected by a counter-movement with a reason,
   never an update.
-- Recipe **versioning** (scope item 63/15): a new version row is inserted and `is_current`
-  flips; historical versions keep COGS accurate for past orders (Phase 8 joins by version).
+- Recipe **versioning**: a new version row is inserted and `is_current` flips; historical
+  versions keep COGS accurate for past orders (scope item 87; Phase 8 joins by version).
+  `yield_qty` covers scope item 63's yield factors.
 - Unit math: convert through `unit_conversions` only; mismatched units without a conversion row
   is a 409/validation error, not a silent assumption.
 - Completing a count: `theoretical = ledger balance`, `variance = counted − theoretical`;

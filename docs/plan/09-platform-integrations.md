@@ -18,9 +18,11 @@ pass (rate limits, request logging, readiness).
 ### 1. Event persistence, replay & webhooks (scope 97–98)
 
 - Upgrade Phase 0's bus: every published event is durable in `domain_events`; add a
-  `webhook_subscriptions` table (`workspace_id`, `url`, `secret` (hashed), `event_types` array,
-  `is_active`) and a `webhook_deliveries` log (`subscription_id`, `event_id`, `status`
-  `pending|delivered|failed|exhausted`, `attempts`, `next_retry_at`, `response_status`).
+  `webhook_subscriptions` table (`workspace_id`, `url`, `secret` (encrypted at rest — the
+  delivery signer needs the plaintext to compute HMACs; hashing only works for verifying
+  *inbound* secrets), `event_types` array, `is_active`) and a `webhook_deliveries` log
+  (`subscription_id`, `event_id`, `status` `pending|delivered|failed|exhausted`, `attempts`,
+  `next_retry_at`, `response_status`).
 - Delivery worker (in-process timer table-poll loop — no external queue): HMAC-signed POSTs,
   exponential backoff, dead-letter after N attempts; manual redelivery endpoint.
 - Replay tooling: re-dispatch events in a seq range to rebuild a projection or re-fire
@@ -30,8 +32,8 @@ pass (rate limits, request logging, readiness).
 
 - `customers` (workspace-scoped, name/phone/email, `external_ref`), `customer_orders` link via
   Phase 4's `orders.customer_*`; loyalty: `loyalty_accounts` (points int), `loyalty_ledger`
-  (append-only earn/redeem tied to payments/orders). Redeem at payment time via a tender
-  (`gift|loyalty`) — Phase 6's tender enum already reserves it.
+  (append-only earn/redeem tied to payments/orders). Redeem at payment time through the
+  `loyalty` tender, reserved in Phase 6's tender enum.
 
 ### 3. Offline sync (scope 99) — design first, then minimal runtime
 
@@ -55,7 +57,7 @@ pass (rate limits, request logging, readiness).
 - **Accounting**: the Phase 6 CSV export hardened into a scheduled summary export (per
   business day, per tender).
 
-### 5. Operational hardening (scope 95–96, 101, 108–109)
+### 5. Operational hardening (scope 102, 108–109)
 
 - Rate limiting middleware (per-IP + per-session token bucket) on auth and public token
   routes; structured request logging with request ids (already present) enriched with

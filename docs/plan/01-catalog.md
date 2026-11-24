@@ -37,8 +37,9 @@ Per-workspace price overrides are deferred (see plan § Decisions).
 
 ## Invariants & rules
 
-- `base_price` and all deltas are ≥ 0 **deltas may be negative** (e.g. "no onions −$0.50") —
-  but item price resolves to ≥ 0. Negative-only checks happen at resolution time.
+- `base_price` is ≥ 0; price deltas (variant and modifier) are signed and **may be negative**
+  (e.g. "no onions" −$0.50) — but a resolved item price is always clamped to ≥ 0, checked at
+  resolution time.
 - `min_selects ≤ max_selects` on modifier groups; nesting depth ≤ 3 (service-enforced) to keep
   resolution tractable; a group cannot nest itself (cycle check on write).
 - A modifier's price delta is **additive** to the item/variant price; variant delta applies
