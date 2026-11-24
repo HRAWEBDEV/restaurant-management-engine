@@ -10,6 +10,9 @@ not separately maintained data.
 
 ## Implementation status
 
+The build order for implementing the domains below lives in [docs/plan.md](plan.md) (master
+plan) with one detailed document per phase under `docs/plan/`.
+
 The tenancy foundation is built; the operational domains below are scoped but not implemented.
 
 | Domain | Status | Notes |

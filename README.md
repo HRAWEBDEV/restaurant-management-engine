@@ -81,6 +81,7 @@ curl localhost:3000/api/v1/health
 | [`docs/data-model.md`](docs/data-model.md) | Identity/tenancy model, tables, constraints, known gaps |
 | [`docs/api.md`](docs/api.md) | API conventions and the endpoint catalog |
 | [`docs/product-scope.md`](docs/product-scope.md) | Full feature list and domain rules |
+| [`docs/plan.md`](docs/plan.md) | Delivery plan toward the full product; per-phase detail docs under `docs/plan/` |
 | [`docs/testing.md`](docs/testing.md) | How tests are written and run in this codebase |
 | [`AGENTS.md`](AGENTS.md) | Conventions and working agreements for coding agents |
 
