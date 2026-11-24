@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import type { CatalogCategory } from "../../db/schemas/catalogCategories";
 import type { Organization } from "../../db/schemas/organizations";
 import type { WorkspaceMember } from "../../db/schemas/workspaceMembers";
 import type { Workspace } from "../../db/schemas/workspaces";
 import {
+  catalogCategoryActivity,
   organizationActivity,
   workspaceActivity,
   workspaceMemberActivity,
@@ -76,5 +78,32 @@ describe("activityDefinitions", () => {
         before: { role: "admin" } as WorkspaceMember,
       }),
     ).toBe('Hamid deleted workspace membership as "admin"');
+  });
+
+  it("summarizes catalog category activity with the category name", () => {
+    expect(
+      renderSummary(catalogCategoryActivity, {
+        action: "created",
+        actor,
+        after: { name: "Starters" } as CatalogCategory,
+      }),
+    ).toBe('Hamid created category "Starters"');
+
+    expect(
+      renderSummary(catalogCategoryActivity, {
+        action: "updated",
+        actor,
+        before: { name: "Starters" } as CatalogCategory,
+        after: { name: "Appetizers" } as CatalogCategory,
+      }),
+    ).toBe('Hamid updated category "Appetizers"');
+
+    expect(
+      renderSummary(catalogCategoryActivity, {
+        action: "archived",
+        actor,
+        before: { name: "Starters" } as CatalogCategory,
+      }),
+    ).toBe('Hamid archived category "Starters"');
   });
 });

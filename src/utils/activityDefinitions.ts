@@ -1,3 +1,4 @@
+import type { CatalogCategory } from "../db/schemas/catalogCategories";
 import type { OrganizationInvitation } from "../db/schemas/organizationInvitations";
 import type { OrganizationMember } from "../db/schemas/organizationMembers";
 import type { Organization } from "../db/schemas/organizations";
@@ -97,12 +98,32 @@ type OrganizationMemberActivityAction =
 type WorkspaceMemberActivityAction =
   (typeof workspaceMemberActivity)["actions"][number];
 
+/**
+ * Audit definition for catalog categories. `position` is part of the diff
+ * allowlist so reorder moves are captured; deletions are archives
+ * (`is_active = false`), hence the `archived` verb instead of `deleted`.
+ */
+const catalogCategoryActivity = defineActivity<CatalogCategory>()({
+  entityType: "catalog_category",
+  actions: ["created", "updated", "archived"],
+  diff: ["name", "description", "isActive", "position"],
+  summarize: ({ action, actor, before, after }) => {
+    const name = after?.name ?? before?.name;
+
+    return `${actor} ${action} category${name ? ` "${name}"` : ""}`;
+  },
+});
+
+type CatalogCategoryActivityAction =
+  (typeof catalogCategoryActivity)["actions"][number];
+
 export type {
   WorkspaceActivityAction,
   OrganizationActivityAction,
   OrganizationInvitationActivityAction,
   OrganizationMemberActivityAction,
   WorkspaceMemberActivityAction,
+  CatalogCategoryActivityAction,
 };
 export {
   workspaceActivity,
@@ -110,4 +131,5 @@ export {
   organizationInvitationActivity,
   organizationMemberActivity,
   workspaceMemberActivity,
+  catalogCategoryActivity,
 };

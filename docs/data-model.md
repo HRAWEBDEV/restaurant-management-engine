@@ -226,7 +226,12 @@ index also serves lookups by `workspace_id` alone. `insertCatalogCategorySchema`
 `workspaceId` (resolved from the `x-workspace-id` header, never client input) along with
 `id` / `createdAt` / `updatedAt`; `updateCatalogCategorySchema` picks
 `{ name, description, isActive }` — `position` is managed by the reorder endpoint, not item
-updates. Schema only so far: no service or routes exist yet (Phase 1 in progress).
+updates. Served by `CatalogCategoriesService` (`src/services/catalogCategoriesService.ts`):
+`getCatalogCategories`, `getCatalogCategoryById` (workspace-scoped), `createCategory`
+(appends at max position + 1, name conflict → `ConflictError`), `updateCategory`,
+`archiveCategory` (delete = archive; idempotent), and `reorderCategories` (full ordered id
+list; a stale/mismatched list → `ConflictError`). Every mutation writes its
+`catalog_category` audit row on the same transaction. Routes are not mounted yet.
 
 ## Relationship summary
 
@@ -438,16 +443,20 @@ same executor/transaction as the mutation):
 Definitions live in `src/utils/activityDefinitions.ts`, built with `defineActivity<TEntity>()` —
 typed so the `diff` allowlist references real entity fields and a typo in `action` fails at compile
 time. Defined today: `organizationActivity`, `workspaceActivity`, `organizationInvitationActivity`,
-and `organizationMemberActivity` (diffs over their mutable fields).
+`organizationMemberActivity`, `workspaceMemberActivity`, and `catalogCategoryActivity` (diffs over
+their mutable fields).
 
 Current writers: `OrganizationsService.updateOrganization` (`organization.updated`, also fired by
 the logo route), `WorkspacesService.createWorkspace` / `updateWorkspace` (`workspace.created` /
 `workspace.updated`), `WorkspaceMembersService.updateWorkspaceRole` /
 `removeWorkspaceMember` (`workspace_member.updated` / `workspace_member.deleted`),
 `OrganizationMembersService.updateOrganizationRole` / `removeOrganizationMember`
-(`organization_member.updated` / `organization_member.deleted`), and
+(`organization_member.updated` / `organization_member.deleted`),
 `OrganizationInvitationsService.sendInvite` / `revokeInvite` / `acceptInvite`
-(`invitation.created` / `invitation.revoked` / `invitation.accepted` + `member.created`).
+(`invitation.created` / `invitation.revoked` / `invitation.accepted` + `member.created`), and
+`CatalogCategoriesService.createCategory` / `updateCategory` / `archiveCategory` /
+`reorderCategories` (`catalog_category.created` / `.updated` / `.archived`; reorder writes one
+`updated` row per moved category).
 
 ## Constraints and invariants
 
@@ -495,6 +504,6 @@ convention, not debt to pay down.
    after `use(workspaceRoleMiddleware)` per the plan's mount policy
    (`docs/plan/00-foundations.md`).
 4. **Operational data is only starting to land.** `catalog_categories` is the first
-   workspace-scoped domain table (schema + migration only; no service/routes yet). The
-   remaining Phase 1 catalog tables and later domains (floor, orders, kitchen, inventory)
-   carry a `workspace_id` FK as each phase lands (`docs/plan/`).
+   workspace-scoped domain table, served by `CatalogCategoriesService` (routes not mounted
+   yet). The remaining Phase 1 catalog tables and later domains (floor, orders, kitchen,
+   inventory) carry a `workspace_id` FK as each phase lands (`docs/plan/`).
